@@ -1,0 +1,28 @@
+# Build
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Generated icon output (regenerate from the master via generate_icns.sh)
+design_handoff_app_icon/build/
+
+# Packaging output (.app / .dmg) — distributed via GitHub Releases, not git
+dist/
+dist*/
+
+# Local fleet-agent build binary (produced by `go build` / scripts/build-agent.sh)
+agent/leomac-agent
+
+# Reference sources (cloned, not part of this project)
+reference/
+site/
+
+# Tooling / local config
+.claude/
+CLAUDE.md
+
+# macOS
+.DS_Store
+**/.DS_Store

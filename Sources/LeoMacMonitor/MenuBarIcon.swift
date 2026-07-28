@@ -1,0 +1,136 @@
+//
+//  File:      MenuBarIcon.swift
+//  Created:   2026-06-16
+//  Updated:   2026-07-14
+//  Developer: Leo Yuan
+//  Overview:  The live menu-bar glyph used as the MenuBarExtra label: six mini bars —
+//             CPU / GPU / ANE / Media Engine / Memory-usage / Memory-bandwidth — that track
+//             real-time utilization, and turn the whole glyph red (blinking) on an alert
+//             (memory swapping, memory-pressure critical, or GPU throttling).
+//  Notes:     The bars are drawn into an NSImage with Core Graphics and handed to
+//             MenuBarExtra as `Image(nsImage:)`. A live SwiftUI View (HStack/Canvas/
+//             TimelineView) as a MenuBarExtra label does NOT reliably convert to a status
+//             item image (it collapses to zero width and vanishes) — a real bitmap does.
+//             The view re-reads the monitor inside `body`, so @Observable updates re-run
+//             body and refresh the glyph (the same mechanism that updates the dropdown).
+//             Normal state uses a template image (auto light/dark tint); the alert state
+//             draws real red (non-template) and blinks at the sample cadence (~1s) via
+//             sample-count parity. Each bar is a 0...1 fraction:
+//               CPU  = cpu.pUsage (P-cores — what heavy/AI work loads)
+//               GPU  = gpu.usage
+//               ANE  = aneWatts / anePeakWatts (no public utilization API → power proxy)
+//               MEDIA= mediaGBs / mediaPeakGBs (Media Engine bandwidth proxy)
+//               MEM  = memory.usedFraction (unified-memory used)
+//               MEMBW= totalGBs / observed bandwidthPeak (achievable BW is ~half the
+//                      theoretical ceiling on M1 Max — normalizing to spec looks dead)
+//
+import SwiftUI
+import AppKit
+import LeoMacMonitorCore
+
+struct MenuBarIcon: View {
+    let monitor: LeoMacMonitorMonitor
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        // Reading the monitor inside body establishes the @Observable dependency, so
+        // body re-runs (and the glyph refreshes) on every sample. colorScheme tracks the
+        // menu-bar appearance so the label/track stay visible on a light menu bar too.
+        Image(nsImage: Self.glyph(for: monitor, dark: colorScheme == .dark))
+    }
+
+    /// Per-metric bar colors (CPU / GPU / ANE / Media / MEM usage / Mem BW) — a fixed
+    /// legend the dropdown mirrors, so the glyph is self-documenting.
+    static let barColors: [NSColor] = [
+        // The six that must stay apart at 18 pt — this glyph is what sets the palette's size.
+        Palette.pCPU.ns,       // CPU
+        Palette.gpu.ns,        // GPU
+        Palette.ane.ns,        // ANE
+        Palette.flowOut.ns,    // Media
+        Palette.memory.ns,     // MEM
+        Palette.bandwidth.ns,  // Mem BW
+    ]
+
+    /// The 6 bar fractions + alert/blink state that determine the glyph's pixels — shared by
+    /// glyph() and signature() so the two can never drift apart.
+    static func barState(for monitor: LeoMacMonitorMonitor) -> (values: [Double], alert: Bool, blinkDim: Bool) {
+        let s = monitor.snapshot
+        let values: [Double] = [
+            s.cpu.pUsage,
+            s.gpu.usage,
+            min(1, s.power.aneWatts / max(monitor.anePeakWatts, 0.1)),
+            min(1, s.bandwidth.mediaGBs / max(monitor.mediaPeakGBs, 0.5)),
+            s.memory.usedFraction,                  // MEM usage (5th)
+            min(1, s.bandwidth.totalGBs / max(monitor.bandwidthPeakGBs, 1)),  // Mem BW vs observed peak (6th)
+        ]
+        let alert = monitor.memoryRisk == .swapping
+            || monitor.gpuThrottling
+            || s.memory.pressure == .critical
+        // Blink: dim every other sample while alerting (sample count advances each tick).
+        let blinkDim = alert && (monitor.history.gpu.count % 2 == 1)
+        return (values, alert, blinkDim)
+    }
+
+    /// Signature of everything that changes the glyph's pixels: quantized bar heights + the
+    /// alert/blink color state + appearance. Unchanged ⇒ identical bitmap ⇒ skip the re-raster.
+    /// (While alerting, blinkDim alternates each tick, so the glyph correctly re-renders to blink.)
+    static func signature(for monitor: LeoMacMonitorMonitor, dark: Bool) -> String {
+        let st = barState(for: monitor)
+        return MenuBarSignature.bars("ss", st.values, dark: dark,
+                                     extra: (st.alert ? "a" : "n") + (st.blinkDim ? "1" : "0"),
+                                     scale: Double(UIScale.glyph))
+    }
+
+    static func glyph(for monitor: LeoMacMonitorMonitor, dark: Bool) -> NSImage {
+        let (values, alert, blinkDim) = barState(for: monitor)
+
+        let height: CGFloat = Glyph.height
+        let barW: CGFloat = 6.5, gap: CGFloat = 2.0   // bar width doubled (was 3.4)
+        let radius: CGFloat = 1.2
+        let n = CGFloat(values.count)
+        let barsW = barW * n + gap * (n - 1)
+        // Label + track follow the menu-bar appearance (white on dark, black on light) so
+        // they stay visible either way; the value bars keep their fixed metric colors.
+        let inkColor = dark ? NSColor.white : NSColor.black
+        let track = inkColor.withAlphaComponent(0.16)  // always-visible column slot
+
+        // "SS" identifier stacked vertically to the left of the bars (iStat draws its
+        // per-graph label like that — "C/P/U" stacked).
+        let letter = "S" as NSString
+        let labelAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: Glyph.comboLabel, weight: .bold),
+            .foregroundColor: inkColor.withAlphaComponent(0.9),
+        ]
+        let charSize = letter.size(withAttributes: labelAttrs)
+        let labelColW = ceil(charSize.width)
+        let labelGap: CGFloat = 3
+        let originX = labelColW + labelGap
+        let width = ceil(originX + barsW) + 1
+        let half = height / 2
+        let charX = (labelColW - charSize.width) / 2
+        let charY = max(0, (half - charSize.height) / 2)
+
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
+            // Left "SS" label — two letters stacked (top half / bottom half).
+            letter.draw(at: NSPoint(x: charX, y: half + charY), withAttributes: labelAttrs)
+            letter.draw(at: NSPoint(x: charX, y: charY), withAttributes: labelAttrs)
+            // Bars: full-height track + value fill in the metric color (red while alerting).
+            for (i, v) in values.enumerated() {
+                let x = originX + CGFloat(i) * (barW + gap)
+                track.setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: barW, height: height),
+                             xRadius: radius, yRadius: radius).fill()
+                let h = max(2.5, height * CGFloat(min(1, max(0, v))))
+                let color: NSColor = alert
+                    ? (blinkDim ? NSColor.systemRed.withAlphaComponent(0.25) : NSColor.systemRed)
+                    : Self.barColors[i]
+                color.setFill()
+                NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: barW, height: h),
+                             xRadius: radius, yRadius: radius).fill()
+            }
+            return true
+        }
+        image.isTemplate = false   // colored glyph — never template
+        return image
+    }
+}

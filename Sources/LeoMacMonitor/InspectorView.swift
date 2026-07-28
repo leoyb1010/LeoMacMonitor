@@ -1,0 +1,213 @@
+//
+//  File:      InspectorView.swift
+//  Created:   2026-06-25
+//  Updated:   2026-07-03
+//  Developer: Leo Yuan
+//  Overview:  Single-process Inspector sheet: every per-process metric for the focused pid —
+//             CPU (+ P/E split), Compute (IPC / instructions / cycles), Energy (power + wakeups),
+//             Memory footprint, Neural-Engine memory (the one genuine per-process ANE signal),
+//             and Disk — each with a live sparkline. Plus a clearly-labeled system-wide
+//             Accelerators card (GPU/ANE-power/Media/bandwidth are NOT attributable per process).
+//  Notes:     Reads monitor.focusedDetail/focusedHistory/focusEnded (@Observable → live updates).
+//             Built from the shared Card/KV/Sparkline atoms so it reads as part of the suite.
+//             Unavailable values render "—" (first sample, not-own, or chip doesn't expose them).
+//
+import SwiftUI
+import LeoMacMonitorCore
+
+struct InspectorView: View {
+    let monitor: LeoMacMonitorMonitor
+    @Environment(\.dismiss) private var dismiss
+    @State private var pendingForce: Bool? = nil   // nil = no dialog; true = Force Quit, false = graceful Quit
+
+    var body: some View {
+        let d = monitor.focusedDetail
+        let h = monitor.focusedHistory
+        VStack(spacing: Space.none) {
+            header(d)
+            ScrollView {
+                VStack(spacing: Space.card) {
+                    if monitor.focusEnded {
+                        banner("Process exited", "The focused process is no longer running — last values shown.")
+                    }
+                    if let d, !d.isOwn {
+                        banner("Limited", "Not your process — per-process metrics need a process you own.")
+                    }
+                    if let d, d.isOwn {
+                        metricCards(d, h)
+                    } else if d == nil && !monitor.focusEnded {
+                        Text("Sampling…")
+                            .font(.system(.callout, design: .monospaced))
+                            .foregroundStyle(Theme.dim).padding(.vertical, Space.page)
+                    }
+                    acceleratorsCard()
+                }
+                .padding(Space.card)
+            }
+        }
+        .frame(width: Layout.Surface.inspector.width, height: Layout.Surface.inspector.height)
+        .background(Theme.bg)
+        .foregroundStyle(Theme.text)
+        .confirmationDialog(
+            pendingForce.map { "\($0 ? "Force kill" : "Kill") \(monitor.focusedDetail?.name ?? "this process")?" } ?? "",
+            isPresented: Binding(get: { pendingForce != nil }, set: { if !$0 { pendingForce = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let force = pendingForce, let pid = monitor.focusedPID {
+                Button(force ? "Force Kill" : "Kill", role: .destructive) {
+                    if force { ProcessControl.forceKill(pid: pid) } else { ProcessControl.terminate(pid: pid) }
+                    pendingForce = nil
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingForce = nil }
+        }
+    }
+
+    private func header(_ d: ProcessDetail?) -> some View {
+        HStack(alignment: .top, spacing: Space.card) {
+            VStack(alignment: .leading, spacing: Space.hair) {
+                Text(d?.name ?? "Process \(monitor.focusedPID.map { "\($0)" } ?? "")")
+                    .font(Theme.font(.headline, .strong))
+                if let d {
+                    HStack(spacing: Space.row) {
+                        Text("pid \(d.pid)").font(Theme.font(.detail)).foregroundStyle(Theme.dim)
+                        if d.uptime > 0 {
+                            Text("· up \(uptime(d.uptime))").font(Theme.font(.detail)).foregroundStyle(Theme.dim)
+                        }
+                        if d.usesANE {
+                            Text("· ANE").font(Theme.font(.caption, .strong))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, Space.tight).padding(.vertical, Space.hair)
+                                .background(Theme.accent.opacity(0.15), in: Capsule())
+                        }
+                    }
+                    if !d.path.isEmpty {
+                        Text(d.path).font(Theme.font(.caption))
+                            .foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
+            Spacer()
+            // Kill affordances — only for a running process you own (you can't signal others' pids).
+            // Graceful SIGTERM + destructive SIGKILL, both behind a confirm; not a suggestion, an action.
+            if let d, d.isOwn, !monitor.focusEnded {
+                Button("Kill") { pendingForce = false }
+                    .help("Kill — SIGTERM (graceful)")
+                Button("Force Kill", role: .destructive) { pendingForce = true }
+                    .help("Force Kill — SIGKILL")
+            }
+            Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+        }
+        .padding(Space.section)
+        .background(Theme.panel)
+        .overlay(Rectangle().frame(height: Layout.hairline).foregroundStyle(Theme.border), alignment: .bottom)
+    }
+
+    @ViewBuilder private func metricCards(_ d: ProcessDetail, _ h: ProcessDetailHistory) -> some View {
+        Card(title: "CPU") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "CPU", value: pct(d.cpuPercent))
+                KV(key: "P-core / E-core", value: "\(pct(d.cpuPPercent)) / \(pct(eCore(d)))")
+                KV(key: "Threads", value: "\(d.threads)")
+                Sparkline(h.cpu, color: Theme.accent, role: .inline(height: Layout.Meter.sparkline))
+            }
+        }
+        Card(title: "Compute") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "IPC", value: d.ipc.map { String(format: "%.2f", $0) } ?? "—",
+                   valueColor: Theme.accent)
+                KV(key: "Instructions/s", value: si(d.instructionsPerSec))
+                KV(key: "Cycles/s", value: si(d.cyclesPerSec))
+                Sparkline(h.ipc, color: Palette.ane.color, role: .inline(height: Layout.Meter.sparkline))
+            }
+        }
+        Card(title: "Energy") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "Power", value: d.powerWatts.map { String(format: "%.2f W", $0) } ?? "—",
+                   valueColor: Theme.accent)
+                KV(key: "Wakeups/s", value: d.wakeupsPerSec.map { String(format: "%.0f", $0) } ?? "—")
+                Sparkline(h.power, color: Palette.flowOut.color, role: .inline(height: Layout.Meter.sparkline))
+            }
+        }
+        Card(title: "Memory") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "Footprint", value: bytes(d.memoryBytes))
+                KV(key: "Resident", value: bytes(d.residentBytes))
+                Sparkline(h.memory, color: Palette.memory.color, role: .inline(height: Layout.Meter.sparkline))
+            }
+        }
+        Card(title: "Neural Engine (ANE)") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "ANE memory", value: d.aneMemoryBytes > 0 ? bytes(d.aneMemoryBytes) : "—",
+                   valueColor: d.usesANE ? Theme.accent : Theme.dim)
+                KV(key: "Peak", value: d.aneMemoryPeakBytes > 0 ? bytes(d.aneMemoryPeakBytes) : "—")
+                Text(d.usesANE ? "This process is using the Neural Engine."
+                               : "Not using the Neural Engine.")
+                    .font(Theme.font(.caption)).foregroundStyle(Theme.faint)
+                if d.aneMemoryBytes > 0 { Sparkline(h.aneMemory, color: Theme.accent, role: .inline(height: Layout.Meter.sparkline)) }
+            }
+        }
+        Card(title: "Disk") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "Read", value: bps(d.diskReadBytesPerSec))
+                KV(key: "Write", value: bps(d.diskWriteBytesPerSec))
+                KV(key: "Open files", value: "\(d.openFiles)")
+            }
+        }
+    }
+
+    private func acceleratorsCard() -> some View {
+        let s = monitor.snapshot
+        return Card(title: "Accelerators — system-wide") {
+            VStack(alignment: .leading, spacing: Space.tight) {
+                KV(key: "GPU", value: String(format: "%.0f%%", s.gpu.usage * 100))
+                KV(key: "ANE power", value: String(format: "%.1f W", s.power.aneWatts))
+                KV(key: "Media engine", value: String(format: "%.1f GB/s", s.bandwidth.mediaGBs))
+                KV(key: "Memory bandwidth", value: String(format: "%.0f GB/s", s.bandwidth.totalGBs))
+                Text("System-wide — macOS doesn't attribute these to a single process (sudoless).")
+                    .font(Theme.font(.caption)).foregroundStyle(Theme.faint)
+            }
+        }
+    }
+
+    private func banner(_ title: String, _ msg: String) -> some View {
+        VStack(alignment: .leading, spacing: Space.hair) {
+            Text(title).font(Theme.font(.body, .strong))
+            Text(msg).font(Theme.font(.detail)).foregroundStyle(Theme.dim)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Space.card)
+        .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: Radius.panel))
+    }
+
+    // MARK: - formatters
+    private func pct(_ v: Double?) -> String { v.map { String(format: "%.1f%%", $0) } ?? "—" }
+    private func eCore(_ d: ProcessDetail) -> Double? {
+        guard let c = d.cpuPercent, let p = d.cpuPPercent else { return nil }
+        return max(0, c - p)
+    }
+    private func bytes(_ b: UInt64) -> String {
+        let g = Double(b) / 1_073_741_824
+        return g >= 1 ? String(format: "%.2f GB", g) : String(format: "%.0f MB", Double(b) / 1_048_576)
+    }
+    private func si(_ v: Double?) -> String {
+        guard let v else { return "—" }
+        if v >= 1e9 { return String(format: "%.2fB", v / 1e9) }
+        if v >= 1e6 { return String(format: "%.1fM", v / 1e6) }
+        if v >= 1e3 { return String(format: "%.0fK", v / 1e3) }
+        return String(format: "%.0f", v)
+    }
+    private func bps(_ v: Double?) -> String {
+        guard let v else { return "—" }
+        if v >= 1e6 { return String(format: "%.1f MB/s", v / 1e6) }
+        if v >= 1e3 { return String(format: "%.0f KB/s", v / 1e3) }
+        return String(format: "%.0f B/s", v)
+    }
+    private func uptime(_ s: TimeInterval) -> String {
+        let t = Int(s)
+        if t >= 3600 { return "\(t/3600)h \((t%3600)/60)m" }
+        if t >= 60 { return "\(t/60)m" }
+        return "\(t)s"
+    }
+}
