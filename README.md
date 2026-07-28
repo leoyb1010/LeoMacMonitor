@@ -14,7 +14,7 @@ LeoMac监控器是 Leo Yuan 面向 Apple Silicon Mac 打造的中文实时系统
 ## 下载与安装
 
 从 [GitHub Releases](https://github.com/leoyb1010/LeoMacMonitor/releases/latest) 下载最新的
-`LeoMac监控器-*.dmg`，打开后将应用拖入“应用程序”文件夹。
+`LeoMacMonitor-*.dmg`，打开后将“LeoMac监控器”拖入“应用程序”文件夹。
 
 当前 1.0.0 构建使用 Leo Yuan 的 Apple Development 证书签名。由于尚未使用 Developer ID
 完成 Apple 公证，首次在其他 Mac 打开时可能需要在 Finder 中右键应用并选择“打开”。

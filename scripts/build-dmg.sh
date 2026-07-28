@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-1.0.0}"
 DIST="${DIST:-dist}"
 APP="$DIST/LeoMac监控器.app"
-DMG="$DIST/LeoMac监控器-$VERSION.dmg"
+DMG="$DIST/LeoMacMonitor-$VERSION.dmg"
 STAGE="$(mktemp -d /tmp/leomac-dmg.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 
