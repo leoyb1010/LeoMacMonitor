@@ -99,6 +99,7 @@ if let i = args.firstIndex(of: "--serve"), i + 1 < args.count {
     let raw = args[i + 1].hasPrefix(":") ? String(args[i + 1].dropFirst()) : args[i + 1]
     if let p = UInt16(raw) { port = p }
 }
+let servicePort = port
 
 if args.contains("--version") { print(agentVersion); exit(0) }
 if args.contains("--print-token") { print(readOrCreateToken()); exit(0) }
@@ -108,7 +109,7 @@ if args.contains("--print-token") { print(readOrCreateToken()); exit(0) }
 if args.contains("--pair-url") {
     let link = PairingLink(name: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
                            host: primaryIPv4() ?? ProcessInfo.processInfo.hostName,
-                           port: Int(port),
+                           port: Int(servicePort),
                            token: readOrCreateToken())
     print(link.url)
     exit(0)
@@ -124,11 +125,11 @@ let osName = "macOS \(osv.majorVersion).\(osv.minorVersion).\(osv.patchVersion)"
 
 let sampler = SystemSampler()
 let topology = sampler.topology
-let engine = MetricsEngine(topology: topology)
 
 // Sampling blocks ~interval; run it on a dedicated background queue.
 let sampleQueue = DispatchQueue(label: "com.leoyuan.leomac-agent.sample")
 sampleQueue.async {
+    var engine = MetricsEngine(topology: topology)
     var lastTick = Date()
     while true {
         let snap = sampler.sample(interval: 0.2)
@@ -152,11 +153,11 @@ sampleQueue.async {
 nonisolated(unsafe) var serverHolder: FleetAgentServer?
 DispatchQueue.global(qos: .utility).async {
     do {
-        let server = try FleetAgentServer(port: port, configDir: agentConfigDir(),
+        let server = try FleetAgentServer(port: servicePort, configDir: agentConfigDir(),
                                           metricsProvider: { cache.get() })
         try server.start()
         serverHolder = server
-        logErr("serving on :\(port) (mDNS) — enter this token in another Mac's LeoMacMonitor:")
+        logErr("serving on :\(servicePort) (mDNS) — enter this token in another Mac's LeoMacMonitor:")
         logErr(server.pairingToken)
     } catch {
         logErr("start failed: \(error)")
