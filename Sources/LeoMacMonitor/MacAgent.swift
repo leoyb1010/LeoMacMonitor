@@ -52,6 +52,14 @@ final class MacAgentController {
         let osName = "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
         let cache = self.cache
         let configDir = Self.configDir()
+        let didStart: @MainActor @Sendable (FleetAgentServer) -> Void = { [weak self] server in
+            self?.server = server
+        }
+        let didFail: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.isRunning = false
+            self?.task?.cancel()
+            self?.task = nil
+        }
 
         // Refresh the served JSON once a second from the live monitor (on the main actor).
         task = Task { @MainActor in
@@ -65,16 +73,16 @@ final class MacAgentController {
 
         // Build + start the server OFF the main actor: SecPKCS12Import blocks on a secd XPC round
         // trip, which deadlocks if run synchronously on the main actor.
-        Task.detached { [weak self] in
+        Task.detached {
             do {
                 let s = try FleetAgentServer(port: port, configDir: configDir,
                                              metricsProvider: { cache.get() })
                 try s.start()
                 NSLog("[MacAgent] sharing this Mac on :\(port) (mDNS)")
-                await MainActor.run { self?.server = s }
+                await didStart(s)
             } catch {
                 NSLog("[MacAgent] start failed: \(error)")
-                await MainActor.run { self?.isRunning = false; self?.task?.cancel(); self?.task = nil }
+                await didFail()
             }
         }
     }
