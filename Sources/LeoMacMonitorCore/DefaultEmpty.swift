@@ -9,8 +9,8 @@
 //             a machine with no NVIDIA GPU sent `"gpus": null` — and a non-optional `[FleetGPU]`
 //             rejected it with `valueNotFound`, taking that whole machine offline in the viewer.
 //             Every GPU-less Linux box (Raspberry Pi, CPU-only server, VM) hit it.
-//             The VIEWER has to be the tolerant side: it auto-updates via Sparkle, while agents in
-//             the field do not — so tolerating `null` here fixes machines running the old agent
+//             The VIEWER has to be the tolerant side because field agents may remain older — so
+//             tolerating `null` here fixes machines running an old agent
 //             without anyone touching them. Applied to every array in the schema, not just `gpus`,
 //             so the next nil slice can't reintroduce the bug.
 //

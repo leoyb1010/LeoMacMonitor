@@ -36,7 +36,6 @@
 "Dashboard" = "仪表盘";
 "Settings" = "设置";
 "Quit" = "退出";
-"Check for Updates…" = "检查更新…";
 "Open Recording…" = "打开记录…";
 "Zoom In" = "放大";
 "Zoom Out" = "缩小";
@@ -62,7 +61,6 @@
 "Launch at login" = "登录时启动";
 "Show warning banner" = "显示警告横幅";
 "Alert notifications" = "警报通知";
-"Automatically check for updates" = "自动检查更新";
 "Startup & alerts" = "启动与警报";
 "Connect to local AI runtimes" = "连接本地 AI 运行时";
 "Local AI runtime API (opt-in)" = "本地 AI 运行时 API（自愿启用）";

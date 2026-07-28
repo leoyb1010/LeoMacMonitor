@@ -6,9 +6,7 @@
 #  Developer: Leo Yuan
 #  Overview:  Builds a local LeoMac monitor app from the SwiftPM executable.
 #  Notes:     This is for development/local install. It does not notarize or create
-#             a DMG; use scripts/package.sh for Developer ID distribution.
-#             Embeds Sparkle.framework (ad-hoc signed) so the bundle actually launches —
-#             the SPM binary links @rpath/Sparkle.framework.
+#             a DMG; use scripts/build-dmg.sh for distribution packaging.
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -114,14 +112,6 @@ cat > "$WIDGET_APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "Embedding Sparkle.framework..."
-mkdir -p "$APPDIR/Contents/Frameworks"
-cp -R "$BIN_DIR/Sparkle.framework" "$APPDIR/Contents/Frameworks/"
-# Downloads may carry Finder/quarantine xattrs that make nested code signing fail.
-xattr -cr "$APPDIR/Contents/Frameworks/Sparkle.framework"
-# The SPM binary links @rpath/Sparkle.framework; point rpath at the bundle's Frameworks.
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$APPDIR/Contents/MacOS/$APP_EXECUTABLE" 2>/dev/null || true
-
 # Finder metadata on copied images or the embedded extension invalidates Developer ID/development
 # signatures. Clear it once across the assembled tree before signing anything inside-out.
 xattr -cr "$APPDIR"
@@ -139,17 +129,6 @@ cat > "$WIDGET_ENTITLEMENTS" <<PLIST
 </dict></plist>
 PLIST
 codesign --force --sign "$SIGN_ID" --timestamp=none --entitlements "$WIDGET_ENTITLEMENTS" "$WIDGET_APP"
-# Sparkle: sign nested helpers (deep -> shallow), then the framework, then the app last.
-SPARKLE_FW="$APPDIR/Contents/Frameworks/Sparkle.framework"
-SPV="$SPARKLE_FW/Versions/$(ls "$SPARKLE_FW/Versions" | grep -v Current | head -1)"
-for nested in \
-  "$SPV/XPCServices/Installer.xpc" \
-  "$SPV/XPCServices/Downloader.xpc" \
-  "$SPV/Autoupdate" \
-  "$SPV/Updater.app"; do
-  [ -e "$nested" ] && codesign --force --sign "$SIGN_ID" --timestamp=none "$nested"
-done
-codesign --force --sign "$SIGN_ID" --timestamp=none "$SPARKLE_FW"
 codesign --force --sign "$SIGN_ID" --timestamp=none "$APPDIR"
 codesign --verify --strict --verbose=2 "$APPDIR"
 

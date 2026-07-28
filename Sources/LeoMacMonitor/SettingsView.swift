@@ -35,7 +35,6 @@ struct SettingsView: View {
     @AppStorage("notificationsEnabled") private var notificationsEnabled = false
     @AppStorage("showWarningBanner") private var showWarningBanner = true
     @AppStorage("shareThisMac") private var shareThisMac = false
-    @State private var autoUpdate = false
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var agentToken: String?
 
@@ -128,11 +127,6 @@ struct SettingsView: View {
                 Toggle("Show warning banner", isOn: $showWarningBanner)
                 Toggle("Alert notifications", isOn: $notificationsEnabled)
                     .onChange(of: notificationsEnabled) { _, on in if on { Notifier.requestAuthorization() } }
-                if UpdaterController.shared.canCheck {
-                    Toggle("Automatically check for updates", isOn: $autoUpdate)
-                        .onChange(of: autoUpdate) { _, on in UpdaterController.shared.automaticallyChecks = on }
-                    Button("Check for Updates…") { UpdaterController.shared.checkForUpdates() }
-                }
             } header: {
                 Text("Startup & alerts")
             } footer: {
@@ -191,7 +185,6 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: Layout.Surface.settingsWidth, height: aiRuntimeAPIEnabled ? Layout.Surface.settingsHeightExpanded : Layout.Surface.settingsHeight)
         .onAppear {
-            autoUpdate = UpdaterController.shared.automaticallyChecks
             if shareThisMac { agentToken = MacAgentController.shared.pairingToken }
         }
     }

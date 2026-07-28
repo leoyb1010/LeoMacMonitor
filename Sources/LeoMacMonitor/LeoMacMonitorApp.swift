@@ -149,10 +149,6 @@ struct LeoMacMonitorApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 940, height: 760)
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { UpdaterController.shared.checkForUpdates() }
-                    .disabled(!UpdaterController.shared.canCheck)
-            }
             CommandGroup(after: .newItem) {
                 Button("Open Recording…") { Self.openRecordingPanel() }
                     .keyboardShortcut("o", modifiers: .command)

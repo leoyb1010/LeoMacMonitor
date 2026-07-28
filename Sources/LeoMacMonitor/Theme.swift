@@ -874,7 +874,8 @@ struct Card<Content: View, Graph: View>: View {
     let title: String
     var menuBarPin: Binding<Bool>? = nil   // when set, a switch in the title promotes the card to the menu bar
     var liveAccent: Color? = nil           // priority-card live signal in the title row
-    var aiOrbState: AIStatusOrb.State? = nil
+    var orbState: AIStatusOrb.State? = nil
+    var orbStyle: AIStatusOrb.Style = .orbits
     var alert: Color? = nil                // non-nil → warning state: colored border (memory pressure / GPU throttle)
     @ViewBuilder var content: Content
     /// Optional graph that fills the card's spare space BELOW the content (in-flow, fill: true), so a
@@ -884,13 +885,15 @@ struct Card<Content: View, Graph: View>: View {
     @ViewBuilder var graph: Graph
 
     init(title: String, menuBarPin: Binding<Bool>? = nil, liveAccent: Color? = nil,
-         aiOrbState: AIStatusOrb.State? = nil, alert: Color? = nil,
+         orbState: AIStatusOrb.State? = nil, orbStyle: AIStatusOrb.Style = .orbits,
+         alert: Color? = nil,
          @ViewBuilder content: () -> Content,
          @ViewBuilder graph: () -> Graph) {
         self.title = title
         self.menuBarPin = menuBarPin
         self.liveAccent = liveAccent
-        self.aiOrbState = aiOrbState
+        self.orbState = orbState
+        self.orbStyle = orbStyle
         self.alert = alert
         self.content = content()
         self.graph = graph()
@@ -914,8 +917,8 @@ struct Card<Content: View, Graph: View>: View {
                     .lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
                 if let liveAccent {
-                    if let aiOrbState {
-                        AIStatusOrb(state: aiOrbState, color: liveAccent,
+                    if let orbState {
+                        AIStatusOrb(state: orbState, style: orbStyle, color: liveAccent,
                                     size: min(UIScale.scaled(27), 29))
                     } else {
                         LiveSignalMark(color: liveAccent)
@@ -948,10 +951,11 @@ struct Card<Content: View, Graph: View>: View {
 extension Card where Graph == EmptyView {
     /// Graphless card (most cards): keeps existing `Card(title:) { ... }` call sites working.
     init(title: String, menuBarPin: Binding<Bool>? = nil, liveAccent: Color? = nil,
-         aiOrbState: AIStatusOrb.State? = nil, alert: Color? = nil,
+         orbState: AIStatusOrb.State? = nil, orbStyle: AIStatusOrb.Style = .orbits,
+         alert: Color? = nil,
          @ViewBuilder content: () -> Content) {
         self.init(title: title, menuBarPin: menuBarPin, liveAccent: liveAccent,
-                  aiOrbState: aiOrbState, alert: alert,
+                  orbState: orbState, orbStyle: orbStyle, alert: alert,
                   content: content, graph: { EmptyView() })
     }
 }

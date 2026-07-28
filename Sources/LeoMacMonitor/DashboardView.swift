@@ -559,7 +559,7 @@ private struct AIWorkloadCard: View {
     }
 
     var body: some View {
-        Card(title: "AI Workload", liveAccent: orbColor, aiOrbState: orbState) {
+        Card(title: "AI Workload", liveAccent: orbColor, orbState: orbState, orbStyle: .ribbon) {
             VStack(alignment: .leading, spacing: Space.hair) {
                 // Headline: what the workload IS (semantic), above the per-engine breakdown.
                 HStack(spacing: Space.card) {
@@ -876,13 +876,18 @@ private struct CPUCard: View {
     private let alertColor = Palette.State.critical.color
 
     private var pMaxMHz: Double { topology?.pFreqsMHz.max() ?? 0 }
+    private var orbState: AIStatusOrb.State {
+        if throttling { return .constrained }
+        return max(cpu.eUsage, cpu.pUsage) >= 0.12 ? .active : .idle
+    }
 
     var body: some View {
         // When the P-cluster is thermally throttled: a red card border (consistent with the GPU card's
         // throttle treatment) flags it, and a dim "P ceiling" line states the fact — clock vs the chip's
         // DVFS ceiling. Border = salience, line = the instrument reading.
         Card(title: "CPU", menuBarPin: menuBarItems.pin(.cpu),
-             liveAccent: pColor, alert: throttling ? alertColor : nil) {
+             liveAccent: pColor, orbState: orbState, orbStyle: .orbits,
+             alert: throttling ? alertColor : nil) {
             Bar(label: "E-cores", value: cpu.eUsage,
                 detail: String(format: "%.0f%%  %.0f MHz", cpu.eUsagePercent, cpu.eFreqMHz), encoding: .identity(eColor))
             Bar(label: "P-cores", value: cpu.pUsage,
@@ -919,9 +924,15 @@ private struct AcceleratorCard: View {
     private let memColor = MetricPalette.gpuMemC    // sky cyan — GPU memory
     private let mediaColor = MetricPalette.mediaC   // orange
     private let aneColor = MetricPalette.aneC       // purple
+    private var orbState: AIStatusOrb.State {
+        if throttling { return .constrained }
+        return gpu.usage >= 0.12 || power.aneWatts >= 0.5 || bandwidth.mediaGBs >= 0.25
+            ? .active : .idle
+    }
 
     var body: some View {
         Card(title: "GPU", menuBarPin: menuBarItems.pin(.gpu), liveAccent: gpuColor,
+             orbState: orbState, orbStyle: .globe,
              alert: throttling ? Palette.State.critical.color : nil) {
             Bar(label: "GPU", value: gpu.usage,
                 detail: String(format: "%.0f%%  %.1f W  %.0f MHz", gpu.usagePercent, power.gpuWatts, gpu.freqMHz),
@@ -981,6 +992,13 @@ private struct MemoryBandwidthCard: View {
         case .normal:   return nil
         case .warning:  return Palette.State.warn.color
         case .critical: return Palette.State.critical.color
+        }
+    }
+
+    private var orbState: AIStatusOrb.State {
+        switch memory.pressure {
+        case .critical, .warning: return .constrained
+        case .normal: return memory.usedFraction >= 0.45 ? .active : .idle
         }
     }
 
@@ -1096,9 +1114,17 @@ private struct MemoryOverviewCard: View {
         }
     }
 
+    private var orbState: AIStatusOrb.State {
+        switch memory.pressure {
+        case .critical, .warning: return .constrained
+        case .normal: return memory.usedFraction >= 0.45 ? .active : .idle
+        }
+    }
+
     var body: some View {
         Card(title: "Memory", menuBarPin: menuBarItems.pin(.memory),
-             liveAccent: MemoryBandwidthCard.memoryTrendColor, alert: alertColor) {
+             liveAccent: MemoryBandwidthCard.memoryTrendColor, orbState: orbState, orbStyle: .cube,
+             alert: alertColor) {
             HStack {
                 Text(String(format: "%.1f / %.0f GB", memory.usedGB, memory.totalGB))
                     .font(Theme.font(.headline, .strong))
@@ -1135,8 +1161,15 @@ private struct BandwidthOverviewCard: View {
     let peak: Double
     let history: [Double]
 
+    private var fraction: Double { min(1, bandwidth.totalGBs / max(peak, 1)) }
+    private var orbState: AIStatusOrb.State {
+        if fraction >= 0.85 { return .constrained }
+        return bandwidth.totalGBs >= 0.5 ? .active : .idle
+    }
+
     var body: some View {
-        Card(title: "Bandwidth", liveAccent: MemoryBandwidthCard.bandwidthColor) {
+        Card(title: "Bandwidth", liveAccent: MemoryBandwidthCard.bandwidthColor,
+             orbState: orbState, orbStyle: .wave) {
             Bar(label: "Total", value: min(1, bandwidth.totalGBs / max(peak, 1)),
                 detail: String(format: "%.0f GB/s", bandwidth.totalGBs),
                 encoding: .identity(MemoryBandwidthCard.bandwidthColor))
@@ -1160,9 +1193,13 @@ private struct NetworkOverviewCard: View {
     private let downColor = Palette.flowIn.color
     private let upColor = Palette.flowOut.color
     private var chartCeiling: Double { max(downHistory.max() ?? 0, upHistory.max() ?? 0, 1) }
+    private var orbState: AIStatusOrb.State {
+        network.downloadBytesPerSec + network.uploadBytesPerSec >= 32_768 ? .active : .idle
+    }
 
     var body: some View {
-        Card(title: "Network", menuBarPin: menuBarItems.pin(.network), liveAccent: downColor) {
+        Card(title: "Network", menuBarPin: menuBarItems.pin(.network), liveAccent: downColor,
+             orbState: orbState, orbStyle: .helix) {
             KV(key: "↓ Download", value: formatRate(network.downloadBytesPerSec), valueColor: downColor)
             KV(key: "↑ Upload", value: formatRate(network.uploadBytesPerSec), valueColor: upColor)
         } graph: {
@@ -1181,9 +1218,14 @@ private struct DiskOverviewCard: View {
     private let readColor = Palette.flowIn.color
     private let writeColor = Palette.flowOut.color
     private var chartCeiling: Double { max(readHistory.max() ?? 0, writeHistory.max() ?? 0, 1) }
+    private var orbState: AIStatusOrb.State {
+        if disk.usedFraction >= 0.90 { return .constrained }
+        return disk.readBytesPerSec + disk.writeBytesPerSec >= 262_144 ? .active : .idle
+    }
 
     var body: some View {
-        Card(title: "Disk", menuBarPin: menuBarItems.pin(.disk), liveAccent: readColor) {
+        Card(title: "Disk", menuBarPin: menuBarItems.pin(.disk), liveAccent: readColor,
+             orbState: orbState, orbStyle: .radar) {
             KV(key: "Read", value: formatRate(disk.readBytesPerSec), valueColor: readColor)
             KV(key: "Write", value: formatRate(disk.writeBytesPerSec), valueColor: writeColor)
             Bar(label: "Used", value: disk.usedFraction,
@@ -1323,8 +1365,16 @@ private struct SensorsCard: View {
         }
     }
 
+    private var orbState: AIStatusOrb.State {
+        if thermal.isThrottling || temperature.groups.map(\.maximum).max() ?? 0 >= 95 {
+            return .constrained
+        }
+        return temperature.groups.isEmpty ? .idle : .active
+    }
+
     var body: some View {
-        Card(title: "Sensors", menuBarPin: menuBarItems.pin(.sensors)) {
+        Card(title: "Sensors", menuBarPin: menuBarItems.pin(.sensors),
+             liveAccent: pressureColor, orbState: orbState, orbStyle: .morph) {
             VStack(alignment: .leading, spacing: Space.tight) {
                 if UIScale.current >= 1.75 {
                     // Tiny-display layout: pressure + fans share one line and every temperature

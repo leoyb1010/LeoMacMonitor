@@ -23,10 +23,7 @@ let package = Package(
         .executable(name: "LeoMacMonitor", targets: ["LeoMacMonitor"]),
         .executable(name: "LeoMacMonitorWidget", targets: ["LeoMacMonitorWidget"]),
     ],
-    dependencies: [
-        // Auto-update for the self-distributed (non-App-Store) app.
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-    ],
+    dependencies: [],
     targets: [
         // Private IOReport declarations exposed to Swift.
         .target(name: "CIOReport"),
@@ -63,8 +60,7 @@ let package = Package(
         // SwiftUI app (menu bar + full window). Runs via `xcrun swift run LeoMacMonitor`.
         .executableTarget(
             name: "LeoMacMonitor",
-            dependencies: ["LeoMacMonitorCore", "LeoMacMonitorWidgetShared",
-                           .product(name: "Sparkle", package: "Sparkle")],
+            dependencies: ["LeoMacMonitorCore", "LeoMacMonitorWidgetShared"],
             resources: [.process("Resources")],
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-undefined", "-Xlinker", "dynamic_lookup"]),

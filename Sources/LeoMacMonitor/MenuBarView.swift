@@ -1,76 +1,242 @@
-//
-//  File:      MenuBarView.swift
-//  Created:   2026-06-08
-//  Updated:   2026-06-24
-//  Developer: Leo Yuan
-//  Overview:  Compact menu-bar popover content: the essentials at a glance (E/P, mem,
-//             GPU, bandwidth, power, die temp), trend sparklines, top processes, plus
-//             "Open Dashboard" (brings the full window forward) / Settings / Quit.
-//  Notes:     Shares the same LeoMacMonitorMonitor as the full window, so both stay in sync.
-//             "compactGPUMode" (UserDefaults) swaps the full readout for a single
-//             GPU-focused line: GPU% / GPU W / GPU GB/s / die °C.
-//             "Open Dashboard" raises the window identified by "leomacmonitor-main".
-//
 import SwiftUI
 import AppKit
 import LeoMacMonitorCore
 
+/// The combined menu-bar cockpit. This surface deliberately owns a fixed 100% layout because it
+/// opens on the normal display; the dashboard's 90–250% auxiliary-screen zoom must never reach it.
 struct MenuBarView: View {
-    // Each of these is its own SwiftUI root (an NSHostingController popover, a sibling
-    // Scene, or the window), so it must observe the scale keys itself — an environment
-    // value injected upstream never arrives here. Read only to invalidate on change; the
-    // tokens themselves read the store (see UIScale).
-    @AppStorage(UIScale.zoomKey) private var uiZoom = 1.0
-    @AppStorage(UIScale.densityKey) private var uiDensity = Density.standard.rawValue
     let monitor: LeoMacMonitorMonitor
     @AppStorage("temperatureFahrenheit") private var fahrenheit = false
     @AppStorage("compactGPUMode") private var compactGPU = false
 
+    private let panelWidth: CGFloat = 430
+    private let gap: CGFloat = 8
+
     var body: some View {
         let snapshot = monitor.snapshot
-        VStack(alignment: .leading, spacing: Space.hair) {
+        VStack(alignment: .leading, spacing: 10) {
             if compactGPU {
                 compactGPURow(snapshot)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: Space.hair) {
-                        fullReadout(snapshot)
-                    }
-                }
-                .frame(maxHeight: UIScale.scaled(520))
+                cockpit(snapshot)
             }
 
             Divider()
-                .padding(.bottom, Space.hair)
-            // One full-width primary action, then two equal-width secondary buttons — all
-            // share PopoverButtonStyle so they match the cards (panel fill, hairline border,
-            // mono label) at a uniform height. "Check for Updates…" lives in Settings.
-            VStack(spacing: Space.row) {
-                Button {
-                    openMainDashboard()
-                } label: {
-                    Label("Open Dashboard", systemImage: "macwindow")
-                }
-                .buttonStyle(PopoverButtonStyle(prominent: true))
-
-                HStack(spacing: Space.row) {
-                    Button("Settings") { openAppSettings() }
-                        .buttonStyle(PopoverButtonStyle())
-                    Button("Quit") { NSApplication.shared.terminate(nil) }
-                        .buttonStyle(PopoverButtonStyle())
-                }
-            }
+            actions
         }
-        .padding(Space.section)
-        .frame(width: compactGPU ? Layout.Surface.combinedWidthCompactGPU : Layout.Surface.combinedWidth)
+        .padding(14)
+        .frame(width: compactGPU ? 360 : panelWidth)
         .background(Theme.bg)
         .foregroundStyle(Theme.text)
     }
 
-    /// Single-line GPU-focused readout: GPU% / GPU W / GPU bandwidth / die °C.
+    @ViewBuilder
+    private func cockpit(_ s: SystemSnapshot) -> some View {
+        header(s)
+
+        Grid(horizontalSpacing: gap, verticalSpacing: gap) {
+            GridRow {
+                metricTile(
+                    "CPU", Palette.pCPU.color,
+                    value: String(format: "P %.0f%% · E %.0f%%", s.cpu.pUsagePercent, s.cpu.eUsagePercent),
+                    detail: String(format: "%.0f / %.0f MHz", s.cpu.pFreqMHz, s.cpu.eFreqMHz),
+                    traces: [Trace(monitor.history.pCPU, Palette.pCPU.color),
+                             Trace(monitor.history.eCPU, Palette.eCPU.color)],
+                    axis: .fraction
+                )
+                metricTile(
+                    "GPU", Palette.gpu.color,
+                    value: String(format: "%.0f%%", s.gpu.usagePercent),
+                    detail: String(format: "%.1f W · %.0f MHz", s.power.gpuWatts, s.gpu.freqMHz),
+                    traces: [Trace(monitor.history.gpu, Palette.gpu.color)],
+                    axis: .fraction
+                )
+                metricTile(
+                    "MEMORY", Palette.memory.color,
+                    value: String(format: "%.1f / %.0f GB", s.memory.usedGB, s.memory.totalGB),
+                    detail: String(format: "%.0f%% used · %.0f%% pressure", s.memory.usedPercent,
+                                   s.memory.pressurePercent),
+                    traces: [Trace(monitor.history.memFraction, Palette.memory.color)],
+                    axis: .fraction
+                )
+            }
+
+            GridRow {
+                metricTile(
+                    "BANDWIDTH", Palette.bandwidth.color,
+                    value: String(format: "%.0f GB/s", s.bandwidth.totalGBs),
+                    detail: String(format: "CPU %.0f · GPU %.0f", s.bandwidth.cpuGBs, s.bandwidth.gpuGBs),
+                    traces: [Trace(monitor.history.bandwidth, Palette.bandwidth.color)],
+                    axis: .ceiling(max(monitor.bandwidthPeakGBs, 1))
+                )
+                metricTile(
+                    "NETWORK", Palette.flowIn.color,
+                    value: "↓ \(formatRate(s.network.downloadBytesPerSec))",
+                    detail: "↑ \(formatRate(s.network.uploadBytesPerSec))",
+                    traces: [Trace(monitor.history.netDown, Palette.flowIn.color),
+                             Trace(monitor.history.netUp, Palette.flowOut.color)],
+                    axis: .auto
+                )
+                metricTile(
+                    "DISK", Palette.flowIn.color,
+                    value: "R \(formatRate(s.disk.readBytesPerSec))",
+                    detail: "W \(formatRate(s.disk.writeBytesPerSec))",
+                    traces: [Trace(monitor.history.diskRead, Palette.flowIn.color),
+                             Trace(monitor.history.diskWrite, Palette.flowOut.color)],
+                    axis: .auto
+                )
+            }
+        }
+
+        acceleratorStrip(s)
+        busyProcesses(s)
+    }
+
+    private func header(_ s: SystemSnapshot) -> some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().fill(monitor.bottleneck.color.opacity(0.14))
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(monitor.bottleneck.color)
+            }
+            .frame(width: 27, height: 27)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("LeoMac监控器")
+                    .font(MenuBarTheme.font(.emphasis, .strong))
+                Text("LIVE COCKPIT")
+                    .font(MenuBarTheme.font(.caption, .strong))
+                    .tracking(1.1)
+                    .foregroundStyle(Theme.faint)
+            }
+
+            Spacer(minLength: 6)
+
+            Text(LocalizedStringKey(workloadLabel(s)))
+                .font(MenuBarTheme.font(.detail, .strong))
+                .foregroundStyle(monitor.bottleneck.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(monitor.bottleneck.color.opacity(0.12), in: Capsule())
+
+            Text(String(format: "%.1f W", s.power.socWatts))
+                .font(MenuBarTheme.font(.body, .strong))
+                .foregroundStyle(Theme.dim)
+                .frame(minWidth: 48, alignment: .trailing)
+        }
+    }
+
+    private func metricTile(_ title: String, _ color: Color, value: String, detail: String,
+                            traces: [Trace], axis: ChartAxis) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 6, height: 6)
+                Text(title)
+                    .font(MenuBarTheme.font(.caption, .strong))
+                    .tracking(0.8)
+                    .foregroundStyle(Theme.faint)
+                Spacer(minLength: 0)
+            }
+            Text(value)
+                .font(MenuBarTheme.font(.emphasis, .strong))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(detail)
+                .font(MenuBarTheme.font(.caption))
+                .foregroundStyle(Theme.dim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Sparkline(traces, role: .inline(height: 15, axis: axis))
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    private func acceleratorStrip(_ s: SystemSnapshot) -> some View {
+        HStack(spacing: gap) {
+            statusChip("ANE", String(format: "%.1f W", s.power.aneWatts), MetricPalette.aneC)
+            statusChip("MEDIA", String(format: "%.1f GB/s", s.bandwidth.mediaGBs), MetricPalette.mediaC)
+            statusChip("AI", s.aiRuntimeLabel, monitor.bottleneck.color)
+            statusChip("FITS", s.memoryBudget.fitsNow.first?.label ?? "—", Palette.memory.color)
+        }
+    }
+
+    private func statusChip(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(MenuBarTheme.font(.caption, .strong))
+                .tracking(0.7)
+                .foregroundStyle(color)
+            Text(value)
+                .font(MenuBarTheme.font(.detail, .strong))
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(color.opacity(0.18), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func busyProcesses(_ s: SystemSnapshot) -> some View {
+        let top = Array(s.processes.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(3))
+        VStack(alignment: .leading, spacing: 5) {
+            Text("BUSY PROCESSES")
+                .font(MenuBarTheme.font(.caption, .strong))
+                .tracking(0.9)
+                .foregroundStyle(Theme.faint)
+            if top.isEmpty {
+                Text("—").font(MenuBarTheme.font(.body)).foregroundStyle(Theme.dim)
+            } else {
+                HStack(spacing: gap) {
+                    ForEach(top) { process in
+                        HStack(spacing: 5) {
+                            Text(process.name)
+                                .font(MenuBarTheme.font(.detail))
+                                .foregroundStyle(Theme.text)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 2)
+                            Text(String(format: "%.0f%%", process.cpuPercent))
+                                .font(MenuBarTheme.font(.detail, .strong))
+                                .foregroundStyle(Theme.heat(min(1, process.cpuPercent / 100)))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .frame(maxWidth: .infinity)
+                        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 7))
+                    }
+                }
+            }
+        }
+    }
+
+    private var actions: some View {
+        VStack(spacing: 7) {
+            Button { openMainDashboard() } label: {
+                Label("Open Dashboard", systemImage: "macwindow")
+            }
+            .buttonStyle(PopoverButtonStyle(prominent: true))
+
+            HStack(spacing: 7) {
+                Button("Settings") { openAppSettings() }
+                    .buttonStyle(PopoverButtonStyle())
+                Button("Quit") { NSApplication.shared.terminate(nil) }
+                    .buttonStyle(PopoverButtonStyle())
+            }
+        }
+    }
+
     @ViewBuilder
     private func compactGPURow(_ s: SystemSnapshot) -> some View {
-        HStack(spacing: Space.card) {
+        HStack(spacing: 8) {
             Text("GPU")
                 .font(MenuBarTheme.font(.body, .strong))
                 .foregroundStyle(Theme.accent)
@@ -82,141 +248,20 @@ struct MenuBarView: View {
             compactSeparator
             compactValue(formatTemperature(s.temperature.cpuCelsius, fahrenheit: fahrenheit),
                          color: monitor.gpuThrottling ? Theme.heat(1) : Theme.text)
-            if monitor.gpuThrottling {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: Icon.large))
-                    .foregroundStyle(Theme.heat(1))
-                    .help("GPU thermal throttling")
-            }
         }
     }
 
     private func compactValue(_ text: String, color: Color = Theme.text) -> some View {
-        Text(text)
-            .font(MenuBarTheme.font(.emphasis))
-            .foregroundStyle(color)
+        Text(text).font(MenuBarTheme.font(.emphasis)).foregroundStyle(color)
     }
 
     private var compactSeparator: some View {
         Text("·").font(MenuBarTheme.font(.emphasis)).foregroundStyle(Theme.faint)
     }
 
-    /// "Workload" label, qualified with "(est.)" when the bandwidth-bound verdict rests on an
-    /// estimated reading (BandwidthSampler's PMP-histogram fallback — see BandwidthSample.isEstimated)
-    /// rather than a real per-requestor byte-delta measurement, so the label doesn't overstate
-    /// precision it doesn't have.
     private func workloadLabel(_ snapshot: SystemSnapshot) -> String {
         let label = monitor.bottleneck.label
         guard monitor.bottleneck == .bandwidthBound, snapshot.bandwidth.isEstimated else { return label }
         return label + " (est.)"
-    }
-
-    /// The standard multi-line readout (E/P, memory, GPU, ANE, bandwidth, power, temps).
-    @ViewBuilder
-    private func fullReadout(_ snapshot: SystemSnapshot) -> some View {
-        HStack(spacing: Space.row) {
-            Text("LeoMac监控器")
-                .font(MenuBarTheme.font(.headline, .strong))
-                .foregroundStyle(Theme.accent)
-            Spacer()
-            Circle().fill(Palette.State.calm.color)
-                .frame(width: Layout.Dot.status, height: Layout.Dot.status)
-            Text("Live").font(MenuBarTheme.font(.caption, .strong)).foregroundStyle(Theme.dim)
-        }
-
-        MenuKV(label: "Workload", value: workloadLabel(snapshot), color: monitor.bottleneck.color)
-
-        Divider()
-        MenuKV(label: "CPU", value: String(format: "P %.0f%% · E %.0f%%",
-                                      snapshot.cpu.pUsagePercent, snapshot.cpu.eUsagePercent))
-        MenuKV(label: "GPU", value: String(format: "%.0f%% · %.1f W", snapshot.gpu.usagePercent, snapshot.power.gpuWatts))
-        MenuKV(label: "Memory", value: String(format: "%.1f / %.0f GB · %.0f%% pressure",
-                                         snapshot.memory.usedGB, snapshot.memory.totalGB,
-                                         snapshot.memory.pressurePercent))
-        MenuKV(label: "Network", value: "↓ \(formatRate(snapshot.network.downloadBytesPerSec)) · ↑ \(formatRate(snapshot.network.uploadBytesPerSec))")
-        MenuKV(label: "Disk", value: "R \(formatRate(snapshot.disk.readBytesPerSec)) · W \(formatRate(snapshot.disk.writeBytesPerSec))")
-        MenuKV(label: "ANE", value: String(format: "%.1f W", snapshot.power.aneWatts))
-        MenuKV(label: "Media", value: String(format: "%.1f GB/s", snapshot.bandwidth.mediaGBs))
-        MenuKV(label: "Mem BW", value: String(format: "%.0f GB/s", snapshot.bandwidth.totalGBs))
-        MenuKV(label: "SoC power", value: String(format: "%.1f W", snapshot.power.socWatts))
-        MenuKV(label: "CPU temp", value: formatTemperature(snapshot.temperature.cpuCelsius, fahrenheit: fahrenheit))
-        if snapshot.temperature.hasBattery {
-            MenuKV(label: "Battery", value: formatTemperature(snapshot.temperature.batteryCelsius, fahrenheit: fahrenheit))
-        }
-
-        Divider()
-        MenuKV(label: "AI runtime", value: snapshot.aiRuntimeLabel)
-        MenuKV(label: "Fits now", value: snapshot.memoryBudget.fitsNow.first?.label ?? "—")
-
-        Divider()
-        metricGraphs(snapshot)
-
-        Divider()
-        topProcesses(snapshot)
-    }
-
-    /// Six trend graphs — same metrics, colors AND normalization as the menu-bar glyph.
-    /// Each is plotted on a FIXED Y domain matching its bar (utilization 0...1, ANE/Media
-    /// vs their tracked peaks, Mem BW vs the chip ceiling), so a small or flat signal reads
-    /// small. Auto-scaling would stretch any series to fill the row — looks exaggerated.
-    @ViewBuilder
-    private func metricGraphs(_ s: SystemSnapshot) -> some View {
-        let c = MenuBarIcon.barColors.map(Color.init(nsColor:))
-        Text("TRENDS")
-            .font(MenuBarTheme.font(.sectionMinor))
-            .foregroundStyle(Theme.faint)
-        graphRow("CPU", c[0], monitor.history.pCPU, String(format: "%.0f%%", s.cpu.pUsagePercent),
-                 axis: .fraction)
-        graphRow("GPU", c[1], monitor.history.gpu, String(format: "%.0f%%", s.gpu.usagePercent),
-                 axis: .fraction)
-        graphRow("ANE", c[2], monitor.history.ane, String(format: "%.1f W", s.power.aneWatts),
-                 axis: .ceiling(max(monitor.anePeakWatts, 0.1)))
-        graphRow("MED", c[3], monitor.history.media, String(format: "%.1f GB/s", s.bandwidth.mediaGBs),
-                 axis: .ceiling(max(monitor.mediaPeakGBs, 0.5)))
-        graphRow("MEM", c[4], monitor.history.memFraction, String(format: "%.0f%%", s.memory.usedPercent),
-                 axis: .fraction)
-        graphRow("MBW", c[5], monitor.history.bandwidth, String(format: "%.0f GB/s", s.bandwidth.totalGBs),
-                 axis: .ceiling(max(monitor.bandwidthPeakGBs, 1)))
-    }
-
-    private func graphRow(_ label: String, _ color: Color, _ values: [Double], _ value: String,
-                          axis: ChartAxis = .auto) -> some View {
-        HStack(spacing: Space.row) {
-            Text(label)
-                .font(MenuBarTheme.font(.caption, .strong))
-                .foregroundStyle(color)
-                .frame(width: Layout.Column.trendLabel, alignment: .leading)
-            Sparkline(values, color: color, role: .inline(height: Layout.Meter.sparklineListRow, axis: axis))
-            Text(value)
-                .font(MenuBarTheme.font(.detail, .strong))
-                .foregroundStyle(Theme.dim)
-                .frame(width: Layout.Column.trendValue, alignment: .trailing)
-        }
-    }
-
-    /// Top three processes by CPU — iStat-style at-a-glance "what's busy".
-    @ViewBuilder
-    private func topProcesses(_ s: SystemSnapshot) -> some View {
-        let top = s.processes.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(3)
-        Text("TOP PROCESSES")
-            .font(MenuBarTheme.font(.sectionMinor))
-            .foregroundStyle(Theme.faint)
-        if top.isEmpty {
-            Text("—").font(MenuBarTheme.font(.body)).foregroundStyle(Theme.dim)
-        } else {
-            ForEach(Array(top)) { p in
-                HStack(spacing: Space.row) {
-                    Text(p.name)
-                        .font(MenuBarTheme.font(.body))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 0)
-                    Text(String(format: "%.0f%%", p.cpuPercent))
-                        .font(MenuBarTheme.font(.body, .strong))
-                        .foregroundStyle(Theme.heat(min(1, p.cpuPercent / 100)))
-                }
-            }
-        }
     }
 }

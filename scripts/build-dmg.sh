@@ -18,6 +18,6 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "LeoMac监控器 $VERSION" \
   -srcfolder "$STAGE" -fs HFS+ -ov -format UDZO "$DMG" >/dev/null
 
-shasum -a 256 "$DMG" > "$DMG.sha256"
+(cd "$DIST" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 echo "Built $DMG"
 cat "$DMG.sha256"
