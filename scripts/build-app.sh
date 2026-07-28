@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.1.0}"
 SOURCE_APP="LeoMacMonitor"
 APP_EXECUTABLE="LeoMacMonitor"
 DISPLAY_NAME="${DISPLAY_NAME:-LeoMac监控器}"

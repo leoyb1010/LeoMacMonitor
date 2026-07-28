@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
     *)               [ -z "$VERSION" ] && VERSION="$1" || { echo "Unexpected arg: $1" >&2; exit 2; }; shift ;;
   esac
 done
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.1.0}"
 APP="LeoMacMonitor"
 BUNDLE_ID="com.leoyuan.LeoMacMonitor"
 IDENTITY="${SIGN_ID:-Apple Development: leo yuan (54UB8X9C5F)}"

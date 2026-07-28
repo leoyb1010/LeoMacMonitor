@@ -519,7 +519,7 @@ private struct AIWorkloadCard: View {
 
     private var orbState: AIStatusOrb.State {
         if cpuThrottling || gpuThrottling || memoryRisk != .ok { return .constrained }
-        if activity.cpu || activity.gpu || activity.ane || activity.media { return .active }
+        if snapshot.aiModelActive || activity.gpu || activity.ane || activity.media { return .active }
         return .idle
     }
 
@@ -527,7 +527,6 @@ private struct AIWorkloadCard: View {
         if activity.ane { return aneColor }
         if activity.gpu { return gpuActiveColor }
         if activity.media { return mediaColor }
-        if activity.cpu { return cpuActiveColor }
         return Theme.dim
     }
 

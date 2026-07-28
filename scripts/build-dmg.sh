@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.1.0}"
 DIST="${DIST:-dist}"
 APP="$DIST/LeoMac监控器.app"
 DMG="$DIST/LeoMacMonitor-$VERSION.dmg"
