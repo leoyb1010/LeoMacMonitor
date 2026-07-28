@@ -517,6 +517,20 @@ private struct AIWorkloadCard: View {
 
     private var bwFraction: Double { ceilingGBs > 0 ? min(1, snapshot.bandwidth.totalGBs / ceilingGBs) : 0 }
 
+    private var orbState: AIStatusOrb.State {
+        if cpuThrottling || gpuThrottling || memoryRisk != .ok { return .constrained }
+        if activity.cpu || activity.gpu || activity.ane || activity.media { return .active }
+        return .idle
+    }
+
+    private var orbColor: Color {
+        if activity.ane { return aneColor }
+        if activity.gpu { return gpuActiveColor }
+        if activity.media { return mediaColor }
+        if activity.cpu { return cpuActiveColor }
+        return Theme.dim
+    }
+
     // Memory STATE: swapping > pressure > bandwidth-bound > normal. This row IS the bandwidth-vs-
     // ceiling read — surfaced as the qualitative "Bandwidth-bound" verdict below when traffic nears
     // the chip's spec ceiling (there is no separate numeric gauge) — plus sticky swap, which is
@@ -546,7 +560,7 @@ private struct AIWorkloadCard: View {
     }
 
     var body: some View {
-        Card(title: "AI Workload", liveAccent: aiVerdict.0) {
+        Card(title: "AI Workload", liveAccent: orbColor, aiOrbState: orbState) {
             VStack(alignment: .leading, spacing: Space.hair) {
                 // Headline: what the workload IS (semantic), above the per-engine breakdown.
                 HStack(spacing: Space.card) {
