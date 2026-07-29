@@ -5,5 +5,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.2.0}"
+VERSION="${1:-1.2.1}"
 exec scripts/build-dmg.sh "$VERSION"

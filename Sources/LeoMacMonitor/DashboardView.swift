@@ -169,6 +169,10 @@ struct DashboardView: View {
         let s = state
         let snapshot = s.snapshot
         let warnings = allWarnings(s)
+        let overviewColumns = Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: Space.row, alignment: .top),
+            count: 4
+        )
         // shownWarnings is the DEBOUNCED set (lingers a few seconds after the condition clears) so an
         // oscillating pressure/throttle never makes the banner flicker in and out (#18).
         let visibleWarnings = shownWarnings.filter { !dismissedWarnings.contains(Self.warningKey($0)) }
@@ -206,26 +210,27 @@ struct DashboardView: View {
                         .frame(minHeight: Layout.Row.sensorsNarrow)
                 } else {
 
-                // Two equal-height, four-column overview rows for the small secondary display.
-                // Row 1 is compute + memory traffic; row 2 is AI + thermals + I/O.
-                HStack(alignment: .top, spacing: Space.row) {
+                // One shared 4 × 2 grid: both rows use the SAME four column tracks, row height and
+                // gap. Independent HStacks can drift by a point when their cards have different
+                // intrinsic widths; a single grid makes every vertical edge structurally identical.
+                LazyVGrid(columns: overviewColumns, alignment: .leading, spacing: Space.row) {
                     CPUCard(cpu: snapshot.cpu, topology: s.topology,
                             eHistory: s.history.eCPU, pHistory: s.history.pCPU,
                             throttling: s.cpuThrottling, clockDrop: s.cpuClockDropFraction)
+                        .frame(height: Layout.Row.overviewGrid)
                     AcceleratorCard(gpu: snapshot.gpu, power: snapshot.power, bandwidth: snapshot.bandwidth,
                                     anePeak: s.anePeakWatts, mediaPeak: s.mediaPeakGBs,
                                     gpuHistory: s.history.gpu, gpuMemHistory: s.history.gpuMem,
                                     mediaHistory: s.history.media, aneHistory: s.history.ane,
                                     throttling: s.gpuThrottling)
+                        .frame(height: Layout.Row.overviewGrid)
                     MemoryOverviewCard(memory: snapshot.memory, history: s.history.memory)
+                        .frame(height: Layout.Row.overviewGrid)
                     BandwidthOverviewCard(bandwidth: snapshot.bandwidth,
                                           peak: s.bandwidthPeakGBs,
                                           history: s.history.bandwidth)
-                }
-                .frame(height: Layout.Row.overviewGrid)
+                        .frame(height: Layout.Row.overviewGrid)
 
-                // The second row deliberately uses the exact same fixed height and column count.
-                HStack(alignment: .top, spacing: Space.row) {
                     AIWorkloadCard(snapshot: snapshot,
                                    bottleneck: s.bottleneck,
                                    ceilingGBs: s.bandwidthCeilingGBs,
@@ -237,18 +242,21 @@ struct DashboardView: View {
                                    activity: s.activity,
                                    onInspect: onInspect,
                                    allowKill: onBenchmark != nil)
+                        .frame(height: Layout.Row.overviewGrid)
                     SensorsCard(temperature: snapshot.temperature, thermal: snapshot.thermal,
                                 groupHistory: s.history.sensorGroups)
+                        .frame(height: Layout.Row.overviewGrid)
                     NetworkOverviewCard(network: snapshot.network,
                                         downHistory: s.history.netDown,
                                         upHistory: s.history.netUp)
+                        .frame(height: Layout.Row.overviewGrid)
                     DiskOverviewCard(disk: snapshot.disk,
                                      processes: snapshot.processes,
                                      readHistory: s.history.diskRead,
                                      writeHistory: s.history.diskWrite,
                                      onShowDetails: onShowDiskDetails)
+                        .frame(height: Layout.Row.overviewGrid)
                 }
-                .frame(height: Layout.Row.overviewGrid)
 
                 // Detailed AI runtime and processes stay available below the two overview rows.
                 HStack(alignment: .top, spacing: Space.row) {

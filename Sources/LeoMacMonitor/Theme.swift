@@ -604,7 +604,9 @@ enum Layout {
         /// eight cards aligned while their graphs absorb any remaining vertical room.
         // Above 115% the text keeps growing while the row stops. Graphs yield their spare room
         // first, which preserves two complete rows on a 768-pt auxiliary display.
-        static var overviewGrid: CGFloat { min(UIScale.scaled(190), 220) }
+        // 1.2.1: give the complete 4 × 2 instrument area 10% more vertical breathing room
+        // without changing its four-column footprint on the 1280 × 720 auxiliary display.
+        static var overviewGrid: CGFloat { min(UIScale.scaled(209), 242) }
         /// AI cockpit pair — **minHeight**. Content-driven, both cards are short.
         static var aiCockpit: CGFloat { UIScale.scaled(108) }
         /// SensorsCard in the narrow/remote variant — **minHeight**.
