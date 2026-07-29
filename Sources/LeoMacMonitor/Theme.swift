@@ -839,45 +839,9 @@ func formatBytesOfTotal(_ part: UInt64, _ total: UInt64) -> String {
     return String(format: "%.\(decimals)f / %.\(decimals)f %@", Double(part) / scale, t / scale, unit)
 }
 
-/// A quiet live-signal ornament for priority cards. It communicates that the card is updating
-/// without competing with the measured traces below it, and freezes when Reduce Motion is on.
-private struct LiveSignalMark: View {
-    let color: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { timeline in
-            Canvas { context, size in
-                let phase = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate * 2.2
-                var wave = Path()
-                let samples = 28
-                for index in 0...samples {
-                    let x = size.width * CGFloat(index) / CGFloat(samples)
-                    let envelope = sin(.pi * CGFloat(index) / CGFloat(samples))
-                    let y = size.height * 0.5
-                        + sin(CGFloat(phase) + CGFloat(index) * 0.62) * size.height * 0.28 * envelope
-                    index == 0 ? wave.move(to: CGPoint(x: x, y: y)) : wave.addLine(to: CGPoint(x: x, y: y))
-                }
-                context.stroke(wave, with: .color(color.opacity(0.72)), lineWidth: 1.25)
-
-                let pulse = reduceMotion ? 0.65 : 0.55 + 0.35 * sin(phase * 1.7)
-                let dot = CGRect(x: size.width - 4, y: size.height * 0.5 - 2, width: 4, height: 4)
-                context.fill(Path(ellipseIn: dot), with: .color(color.opacity(pulse)))
-            }
-        }
-        // This is an ornament, not data. A 70-pt wave at high zoom steals the title/value width.
-        .frame(width: min(UIScale.scaled(52), 52), height: min(UIScale.scaled(14), 14))
-        .accessibilityHidden(true)
-        .allowsHitTesting(false)
-    }
-}
-
 struct Card<Content: View, Graph: View>: View {
     let title: String
     var menuBarPin: Binding<Bool>? = nil   // when set, a switch in the title promotes the card to the menu bar
-    var liveAccent: Color? = nil           // priority-card live signal in the title row
-    var orbState: AIStatusOrb.State? = nil
-    var orbStyle: AIStatusOrb.Style = .orbits
     var alert: Color? = nil                // non-nil → warning state: colored border (memory pressure / GPU throttle)
     @ViewBuilder var content: Content
     /// Optional graph that fills the card's spare space BELOW the content (in-flow, fill: true), so a
@@ -885,17 +849,14 @@ struct Card<Content: View, Graph: View>: View {
     /// FIXED-height row, so it absorbs content changes by shrinking/growing rather than resizing the
     /// card. Graphless cards pass EmptyView (collapses; content stays top-aligned).
     @ViewBuilder var graph: Graph
+    @State private var hovering = false
 
-    init(title: String, menuBarPin: Binding<Bool>? = nil, liveAccent: Color? = nil,
-         orbState: AIStatusOrb.State? = nil, orbStyle: AIStatusOrb.Style = .orbits,
+    init(title: String, menuBarPin: Binding<Bool>? = nil,
          alert: Color? = nil,
          @ViewBuilder content: () -> Content,
          @ViewBuilder graph: () -> Graph) {
         self.title = title
         self.menuBarPin = menuBarPin
-        self.liveAccent = liveAccent
-        self.orbState = orbState
-        self.orbStyle = orbStyle
         self.alert = alert
         self.content = content()
         self.graph = graph()
@@ -918,14 +879,6 @@ struct Card<Content: View, Graph: View>: View {
                     .foregroundStyle(Theme.dim)
                     .lineLimit(1).minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
-                if let liveAccent {
-                    if let orbState {
-                        AIStatusOrb(state: orbState, style: orbStyle, color: liveAccent,
-                                    size: min(UIScale.scaled(34), 36))
-                    } else {
-                        LiveSignalMark(color: liveAccent)
-                    }
-                }
                 if let pin = menuBarPin { MenuBarPin(isOn: pin) }
             }
             // Rows flow top-down at natural height, then the graph (when present) fills the space
@@ -945,6 +898,11 @@ struct Card<Content: View, Graph: View>: View {
         // user can see AT A GLANCE which metric is under pressure — not just a global banner (#18).
         .overlay(RoundedRectangle(cornerRadius: Radius.card)
             .strokeBorder(alert ?? Theme.border, lineWidth: alert == nil ? 1 : 1.5))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card)
+            .strokeBorder(Theme.accent.opacity(hovering && alert == nil ? 0.22 : 0), lineWidth: 1))
+        .animation(Motion.state, value: alert != nil)
+        .animation(Motion.interaction, value: hovering)
+        .onHover { hovering = $0 }
         // Clip last so the chart's area gradient respects the rounded corners.
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
     }
@@ -952,12 +910,10 @@ struct Card<Content: View, Graph: View>: View {
 
 extension Card where Graph == EmptyView {
     /// Graphless card (most cards): keeps existing `Card(title:) { ... }` call sites working.
-    init(title: String, menuBarPin: Binding<Bool>? = nil, liveAccent: Color? = nil,
-         orbState: AIStatusOrb.State? = nil, orbStyle: AIStatusOrb.Style = .orbits,
+    init(title: String, menuBarPin: Binding<Bool>? = nil,
          alert: Color? = nil,
          @ViewBuilder content: () -> Content) {
-        self.init(title: title, menuBarPin: menuBarPin, liveAccent: liveAccent,
-                  orbState: orbState, orbStyle: orbStyle, alert: alert,
+        self.init(title: title, menuBarPin: menuBarPin, alert: alert,
                   content: content, graph: { EmptyView() })
     }
 }
@@ -1027,6 +983,7 @@ struct Bar: View {
                     Capsule().fill(Color.white.opacity(0.06))
                     Capsule().fill(fillColor)
                         .frame(width: max(2, geo.size.width * min(1, max(0, value))))
+                        .animation(Motion.data, value: value)
                 }
             }
             .frame(height: 5)
@@ -1047,6 +1004,7 @@ struct StackedBar: View {
                     // which is what lets an 8 pt square still identify its segment.
                     Ink(segment.color).fill.color
                         .frame(width: max(0, geo.size.width * min(1, segment.fraction)))
+                        .animation(Motion.data, value: segment.fraction)
                 }
             }
         }
@@ -1265,6 +1223,7 @@ struct PopoverButtonStyle: ButtonStyle {
                 .background(fill(pressed: pressed), in: RoundedRectangle(cornerRadius: Radius.control))
                 .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(stroke, lineWidth: 1))
                 .contentShape(RoundedRectangle(cornerRadius: Radius.control))
+                .scaleEffect(pressed ? 0.985 : 1)
                 .onHover { hovering = $0 }
                 .animation(.easeOut(duration: 0.12), value: hovering)
                 .animation(.easeOut(duration: 0.12), value: pressed)

@@ -164,6 +164,8 @@ struct DashboardView: View {
     @State private var shownWarnings: [SystemSnapshot.Warning] = []   // DEBOUNCED (lingering) set actually displayed
     @State private var warningClearTask: Task<Void, Never>? = nil     // pending "hide after linger" task
     @AppStorage("showWarningBanner") private var showWarningBanner = true   // #18: let sysmon users opt out of the banner
+    @AppStorage(DashboardFaceMode.storageKey) private var dashboardFaceMode: DashboardFaceMode = .data
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let s = state
@@ -178,7 +180,8 @@ struct DashboardView: View {
         let visibleWarnings = shownWarnings.filter { !dismissedWarnings.contains(Self.warningKey($0)) }
         ScrollView {
             VStack(spacing: Space.tight) {
-                HeaderView(topology: s.topology, power: snapshot.power, battery: snapshot.battery)
+                HeaderView(topology: s.topology, power: snapshot.power, battery: snapshot.battery,
+                           displayMode: mode == .local ? $dashboardFaceMode : nil)
 
                 if mode == .remote {
                     // Remote Mac: only the hardware cards a Mac agent sends. Same look as local, minus
@@ -296,7 +299,7 @@ struct DashboardView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: visibleWarnings.isEmpty)
+        .animation(reduceMotion ? nil : Motion.event, value: visibleWarnings.isEmpty)
         // Debounce (#18): keep the banner up while active; when the condition clears, linger 4 s before
         // hiding so a brief oscillation doesn't respawn it — a recurrence within the window cancels the
         // hide. Replaces the old "forget the dismissal the instant it clears", which caused the flicker.
@@ -343,6 +346,7 @@ private struct HeaderView: View {
     let topology: CPUTopology?
     let power: PowerSample
     let battery: BatteryInfo
+    var displayMode: Binding<DashboardFaceMode>? = nil
     // Menu-bar pin: derived from the item store, not a stored Bool (#27, §4.4).
     @ObservedObject private var menuBarItems = MenuBarItemsModel.shared
 
@@ -383,6 +387,9 @@ private struct HeaderView: View {
                 }
             }
             Spacer()
+            if let displayMode {
+                DashboardFaceModeControl(selection: displayMode)
+            }
             Text(String(format: "%.1f W", power.socWatts))
                 .font(headerFont(12, weight: .medium)).foregroundStyle(Theme.dim)
             if battery.hasBattery {
@@ -533,19 +540,6 @@ private struct AIWorkloadCard: View {
 
     private var bwFraction: Double { ceilingGBs > 0 ? min(1, snapshot.bandwidth.totalGBs / ceilingGBs) : 0 }
 
-    private var orbState: AIStatusOrb.State {
-        if cpuThrottling || gpuThrottling || memoryRisk != .ok { return .constrained }
-        if snapshot.aiModelActive || activity.gpu || activity.ane || activity.media { return .active }
-        return .idle
-    }
-
-    private var orbColor: Color {
-        if activity.ane { return aneColor }
-        if activity.gpu { return gpuActiveColor }
-        if activity.media { return mediaColor }
-        return Theme.dim
-    }
-
     // Memory STATE: swapping > pressure > bandwidth-bound > normal. This row IS the bandwidth-vs-
     // ceiling read — surfaced as the qualitative "Bandwidth-bound" verdict below when traffic nears
     // the chip's spec ceiling (there is no separate numeric gauge) — plus sticky swap, which is
@@ -575,23 +569,29 @@ private struct AIWorkloadCard: View {
     }
 
     var body: some View {
-        Card(title: "AI Workload", liveAccent: orbColor, orbState: orbState, orbStyle: .ribbon) {
-            VStack(alignment: .leading, spacing: Space.hair) {
-                // Headline: what the workload IS (semantic), above the per-engine breakdown.
-                HStack(spacing: Space.card) {
-                    Circle().fill(aiVerdict.0).frame(width: Layout.Dot.verdict, height: Layout.Dot.verdict)
-                    Text(LocalizedStringKey(aiVerdict.1))
-                        .font(Theme.font(.emphasis, .strong))
-                        .foregroundStyle(aiVerdict.0)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                    Spacer(minLength: 0)
+        FlippableMetricCard(id: "ai") {
+            Card(title: "AI Workload") {
+                VStack(alignment: .leading, spacing: Space.hair) {
+                    // Headline: what the workload IS (semantic), above the per-engine breakdown.
+                    HStack(spacing: Space.card) {
+                        MotionStatusPill(label: aiVerdict.1,
+                                         systemImage: snapshot.aiModelActive ? "bolt.fill" : "moon.zzz.fill",
+                                         color: aiVerdict.0)
+                        Spacer(minLength: 0)
+                    }
+                    cpuRow()
+                    stateRow("GPU",   gpuEngine)
+                    stateRow("AI Neural", aneEngine)
+                    stateRow("AI Media",  mediaEngine)
+                    stateRow("AI Memory", memState)
                 }
-                cpuRow()
-                stateRow("GPU",   gpuEngine)
-                stateRow("AI Neural", aneEngine)
-                stateRow("AI Media",  mediaEngine)
-                stateRow("AI Memory", memState)
             }
+        } back: {
+            AIWorkloadMotionFace(cpu: activity.cpu, gpu: activity.gpu, ane: activity.ane, media: activity.media,
+                                 constrained: cpuThrottling || gpuThrottling || memoryRisk != .ok,
+                                 primary: String(format: "GPU %.0f%% · ANE %.1f W",
+                                                 snapshot.gpu.usagePercent, snapshot.power.aneWatts),
+                                 primaryValue: snapshot.gpu.usage + snapshot.power.aneWatts)
         }
         .confirmationDialog(
             pendingKill.map { "\(pendingForce ? "Force kill" : "Kill") \($0.name)  (pid \($0.pid))?" } ?? "",
@@ -653,10 +653,13 @@ private struct AIWorkloadCard: View {
                 .foregroundStyle(Theme.faint)
                 .frame(width: Layout.Column.stateLabel, alignment: .leading)
             Circle().fill(s.0).frame(width: Layout.Dot.status, height: Layout.Dot.status)
+                .animation(Motion.state, value: s.1)
             Text(LocalizedStringKey(s.1))
                 .font(Theme.font(.emphasis, .strong))
                 .foregroundStyle(s.0)
                 .lineLimit(1).minimumScaleFactor(0.8)
+                .contentTransition(.opacity)
+                .animation(Motion.state, value: s.1)
             Spacer(minLength: 6)
             Text(LocalizedStringKey(s.2))
                 .font(Theme.font(.detail))
@@ -892,32 +895,31 @@ private struct CPUCard: View {
     private let alertColor = Palette.State.critical.color
 
     private var pMaxMHz: Double { topology?.pFreqsMHz.max() ?? 0 }
-    private var orbState: AIStatusOrb.State {
-        if throttling { return .constrained }
-        return max(cpu.eUsage, cpu.pUsage) >= 0.12 ? .active : .idle
-    }
-
     var body: some View {
         // When the P-cluster is thermally throttled: a red card border (consistent with the GPU card's
         // throttle treatment) flags it, and a dim "P ceiling" line states the fact — clock vs the chip's
         // DVFS ceiling. Border = salience, line = the instrument reading.
-        Card(title: "CPU", menuBarPin: menuBarItems.pin(.cpu),
-             liveAccent: pColor, orbState: orbState, orbStyle: .orbits,
-             alert: throttling ? alertColor : nil) {
-            Bar(label: "E-cores", value: cpu.eUsage,
-                detail: String(format: "%.0f%%  %.0f MHz", cpu.eUsagePercent, cpu.eFreqMHz), encoding: .identity(eColor))
-            Bar(label: "P-cores", value: cpu.pUsage,
-                detail: String(format: "%.0f%%  %.0f MHz", cpu.pUsagePercent, cpu.pFreqMHz), encoding: .identity(pColor))
+        FlippableMetricCard(id: "cpu") {
+            Card(title: "CPU", menuBarPin: menuBarItems.pin(.cpu),
+                 alert: throttling ? alertColor : nil) {
+                Bar(label: "E-cores", value: cpu.eUsage,
+                    detail: String(format: "%.0f%%  %.0f MHz", cpu.eUsagePercent, cpu.eFreqMHz), encoding: .identity(eColor))
+                Bar(label: "P-cores", value: cpu.pUsage,
+                    detail: String(format: "%.0f%%  %.0f MHz", cpu.pUsagePercent, cpu.pFreqMHz), encoding: .identity(pColor))
 
-            if pMaxMHz > 0 {
-                Bar(label: "P ceiling", value: cpu.pFreqMHz / pMaxMHz,
-                    detail: throttling
-                        ? String(format: "%.0f / %.0f MHz · −%.0f%%", cpu.pFreqMHz, pMaxMHz, clockDrop * 100)
-                        : String(format: "%.0f / %.0f", cpu.pFreqMHz, pMaxMHz),
-                    encoding: .identity(throttling ? alertColor : Theme.dim))
+                if pMaxMHz > 0 {
+                    Bar(label: "P ceiling", value: cpu.pFreqMHz / pMaxMHz,
+                        detail: throttling
+                            ? String(format: "%.0f / %.0f MHz · −%.0f%%", cpu.pFreqMHz, pMaxMHz, clockDrop * 100)
+                            : String(format: "%.0f / %.0f", cpu.pFreqMHz, pMaxMHz),
+                        encoding: .identity(throttling ? alertColor : Theme.dim))
+                }
+            } graph: {
+                Sparkline([Trace(eHistory, eColor), Trace(pHistory, pColor)], role: .trend)
             }
-        } graph: {
-            Sparkline([Trace(eHistory, eColor), Trace(pHistory, pColor)], role: .trend)
+        } back: {
+            CPUMotionFace(eUsage: cpu.eUsage, pUsage: cpu.pUsage,
+                          pFrequencyMHz: cpu.pFreqMHz, throttling: throttling)
         }
     }
 }
@@ -940,31 +942,29 @@ private struct AcceleratorCard: View {
     private let memColor = MetricPalette.gpuMemC    // sky cyan — GPU memory
     private let mediaColor = MetricPalette.mediaC   // orange
     private let aneColor = MetricPalette.aneC       // purple
-    private var orbState: AIStatusOrb.State {
-        if throttling { return .constrained }
-        return gpu.usage >= 0.12 || power.aneWatts >= 0.5 || bandwidth.mediaGBs >= 0.25
-            ? .active : .idle
-    }
-
     var body: some View {
-        Card(title: "GPU", menuBarPin: menuBarItems.pin(.gpu), liveAccent: gpuColor,
-             orbState: orbState, orbStyle: .globe,
-             alert: throttling ? Palette.State.critical.color : nil) {
-            Bar(label: "GPU", value: gpu.usage,
-                detail: String(format: "%.0f%%  %.1f W  %.0f MHz", gpu.usagePercent, power.gpuWatts, gpu.freqMHz),
-                encoding: .identity(gpuColor))
-            Bar(label: "GPU memory", value: gpu.inUseMemoryFraction,
-                detail: String(format: "已用 %.1f GB", gpu.inUseMemoryGB), encoding: .identity(memColor))
-            Bar(label: "ANE est.", value: min(1, power.aneWatts / max(anePeak, 0.1)),
-                detail: String(format: "%.1f W", power.aneWatts), encoding: .identity(aneColor))
-            Bar(label: "Media", value: min(1, bandwidth.mediaGBs / max(mediaPeak, 0.5)),
-                detail: String(format: "%.1f GB/s", bandwidth.mediaGBs), encoding: .identity(mediaColor))
-        } graph: {
-            Sparkline([Trace(gpuHistory, gpuColor),
-                       Trace(gpuMemHistory, memColor),
-                       Trace(aneHistory.map { min(1, $0 / max(anePeak, 0.1)) }, aneColor),
-                       Trace(mediaHistory.map { min(1, $0 / max(mediaPeak, 0.5)) }, mediaColor)],
-                      role: .trend)
+        FlippableMetricCard(id: "gpu") {
+            Card(title: "GPU", menuBarPin: menuBarItems.pin(.gpu),
+                 alert: throttling ? Palette.State.critical.color : nil) {
+                Bar(label: "GPU", value: gpu.usage,
+                    detail: String(format: "%.0f%%  %.1f W  %.0f MHz", gpu.usagePercent, power.gpuWatts, gpu.freqMHz),
+                    encoding: .identity(gpuColor))
+                Bar(label: "GPU memory", value: gpu.inUseMemoryFraction,
+                    detail: String(format: "已用 %.1f GB", gpu.inUseMemoryGB), encoding: .identity(memColor))
+                Bar(label: "ANE est.", value: min(1, power.aneWatts / max(anePeak, 0.1)),
+                    detail: String(format: "%.1f W", power.aneWatts), encoding: .identity(aneColor))
+                Bar(label: "Media", value: min(1, bandwidth.mediaGBs / max(mediaPeak, 0.5)),
+                    detail: String(format: "%.1f GB/s", bandwidth.mediaGBs), encoding: .identity(mediaColor))
+            } graph: {
+                Sparkline([Trace(gpuHistory, gpuColor),
+                           Trace(gpuMemHistory, memColor),
+                           Trace(aneHistory.map { min(1, $0 / max(anePeak, 0.1)) }, aneColor),
+                           Trace(mediaHistory.map { min(1, $0 / max(mediaPeak, 0.5)) }, mediaColor)],
+                          role: .trend)
+            }
+        } back: {
+            GPUMotionFace(usage: gpu.usage, watts: power.gpuWatts,
+                          memoryFraction: gpu.inUseMemoryFraction, throttling: throttling)
         }
     }
 }
@@ -1008,13 +1008,6 @@ private struct MemoryBandwidthCard: View {
         case .normal:   return nil
         case .warning:  return Palette.State.warn.color
         case .critical: return Palette.State.critical.color
-        }
-    }
-
-    private var orbState: AIStatusOrb.State {
-        switch memory.pressure {
-        case .critical, .warning: return .constrained
-        case .normal: return memory.usedFraction >= 0.45 ? .active : .idle
         }
     }
 
@@ -1130,44 +1123,43 @@ private struct MemoryOverviewCard: View {
         }
     }
 
-    private var orbState: AIStatusOrb.State {
-        switch memory.pressure {
-        case .critical, .warning: return .constrained
-        case .normal: return memory.usedFraction >= 0.45 ? .active : .idle
-        }
-    }
-
     var body: some View {
-        Card(title: "Memory", menuBarPin: menuBarItems.pin(.memory),
-             liveAccent: MemoryBandwidthCard.memoryTrendColor, orbState: orbState, orbStyle: .cube,
-             alert: alertColor) {
-            HStack {
-                Text(String(format: "%.1f / %.0f GB", memory.usedGB, memory.totalGB))
-                    .font(Theme.font(.headline, .strong))
-                    .lineLimit(1).minimumScaleFactor(0.7)
-                Spacer(minLength: Space.row)
-                Text(String(format: "%.0f%%", memory.usedPercent))
-                    .font(Theme.font(.body)).foregroundStyle(Theme.dim)
+        FlippableMetricCard(id: "memory") {
+            Card(title: "Memory", menuBarPin: menuBarItems.pin(.memory), alert: alertColor) {
+                HStack {
+                    Text(String(format: "%.1f / %.0f GB", memory.usedGB, memory.totalGB))
+                        .font(Theme.font(.headline, .strong))
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    Spacer(minLength: Space.row)
+                    Text(String(format: "%.0f%%", memory.usedPercent))
+                        .font(Theme.font(.body)).foregroundStyle(Theme.dim)
+                }
+                StackedBar(segments: [
+                    (memory.wiredFraction, wiredColor),
+                    (memory.activeFraction, activeColor),
+                    (memory.compressedFraction, compressedColor),
+                    (memory.freeFraction, freeColor),
+                ])
+                LegendRow(color: wiredColor, key: "Wired", value: String(format: "%.1f GB", memory.wiredGB))
+                LegendRow(color: activeColor, key: "Active", value: String(format: "%.1f GB", memory.activeGB))
+                LegendRow(color: compressedColor, key: "Compressed", value: String(format: "%.1f GB", memory.compressedGB))
+                LegendRow(color: freeColor, key: "Free", value: String(format: "%.1f GB", memory.freeGB))
+                HStack {
+                    Text("Pressure").font(Theme.font(.body)).foregroundStyle(Theme.dim)
+                    Spacer()
+                    Text(String(format: "%.0f%%", memory.pressurePercent))
+                        .font(Theme.font(.body, .strong)).foregroundStyle(pressureColor)
+                }
+            } graph: {
+                Sparkline(history.map { min(1, $0 / max(memory.totalGB, 1)) },
+                          color: MemoryBandwidthCard.memoryTrendColor, role: .trend)
             }
-            StackedBar(segments: [
-                (memory.wiredFraction, wiredColor),
-                (memory.activeFraction, activeColor),
-                (memory.compressedFraction, compressedColor),
-                (memory.freeFraction, freeColor),
-            ])
-            LegendRow(color: wiredColor, key: "Wired", value: String(format: "%.1f GB", memory.wiredGB))
-            LegendRow(color: activeColor, key: "Active", value: String(format: "%.1f GB", memory.activeGB))
-            LegendRow(color: compressedColor, key: "Compressed", value: String(format: "%.1f GB", memory.compressedGB))
-            LegendRow(color: freeColor, key: "Free", value: String(format: "%.1f GB", memory.freeGB))
-            HStack {
-                Text("Pressure").font(Theme.font(.body)).foregroundStyle(Theme.dim)
-                Spacer()
-                Text(String(format: "%.0f%%", memory.pressurePercent))
-                    .font(Theme.font(.body, .strong)).foregroundStyle(pressureColor)
-            }
-        } graph: {
-            Sparkline(history.map { min(1, $0 / max(memory.totalGB, 1)) },
-                      color: MemoryBandwidthCard.memoryTrendColor, role: .trend)
+        } back: {
+            MemoryMotionFace(wired: memory.wiredFraction, active: memory.activeFraction,
+                             compressed: memory.compressedFraction, free: memory.freeFraction,
+                             pressure: memory.pressurePercent / 100, usedGB: memory.usedGB,
+                             totalGB: memory.totalGB,
+                             status: memory.pressure == .normal ? "正常" : memory.pressure == .warning ? "压力升高" : "压力严重")
         }
     }
 }
@@ -1178,24 +1170,25 @@ private struct BandwidthOverviewCard: View {
     let history: [Double]
 
     private var fraction: Double { min(1, bandwidth.totalGBs / max(peak, 1)) }
-    private var orbState: AIStatusOrb.State {
-        if fraction >= 0.85 { return .constrained }
-        return bandwidth.totalGBs >= 0.5 ? .active : .idle
-    }
-
     var body: some View {
-        Card(title: "Bandwidth", liveAccent: MemoryBandwidthCard.bandwidthColor,
-             orbState: orbState, orbStyle: .wave) {
-            Bar(label: "Total", value: min(1, bandwidth.totalGBs / max(peak, 1)),
-                detail: String(format: "%.0f GB/s", bandwidth.totalGBs),
-                encoding: .identity(MemoryBandwidthCard.bandwidthColor))
-            KV(key: "CPU", value: String(format: "%.0f GB/s", bandwidth.cpuGBs))
-            KV(key: "GPU", value: String(format: "%.0f GB/s", bandwidth.gpuGBs))
-            KV(key: "Media", value: String(format: "%.0f GB/s", bandwidth.mediaGBs))
-            KV(key: "Other", value: String(format: "%.0f GB/s", bandwidth.otherGBs))
-        } graph: {
-            Sparkline(history.map { min(1, $0 / max(peak, 1)) },
-                      color: MemoryBandwidthCard.bandwidthColor, role: .trend)
+        FlippableMetricCard(id: "bandwidth") {
+            Card(title: "Bandwidth") {
+                Bar(label: "Total", value: min(1, bandwidth.totalGBs / max(peak, 1)),
+                    detail: String(format: "%.0f GB/s", bandwidth.totalGBs),
+                    encoding: .identity(MemoryBandwidthCard.bandwidthColor))
+                KV(key: "CPU", value: String(format: "%.0f GB/s", bandwidth.cpuGBs))
+                KV(key: "GPU", value: String(format: "%.0f GB/s", bandwidth.gpuGBs))
+                KV(key: "Media", value: String(format: "%.0f GB/s", bandwidth.mediaGBs))
+                KV(key: "Other", value: String(format: "%.0f GB/s", bandwidth.otherGBs))
+            } graph: {
+                Sparkline(history.map { min(1, $0 / max(peak, 1)) },
+                          color: MemoryBandwidthCard.bandwidthColor, role: .trend)
+            }
+        } back: {
+            BandwidthMotionFace(cpu: bandwidth.cpuGBs, gpu: bandwidth.gpuGBs,
+                                media: bandwidth.mediaGBs, other: bandwidth.otherGBs,
+                                total: bandwidth.totalGBs, ceiling: max(peak, 1),
+                                estimated: bandwidth.isEstimated)
         }
     }
 }
@@ -1209,18 +1202,18 @@ private struct NetworkOverviewCard: View {
     private let downColor = Palette.flowIn.color
     private let upColor = Palette.flowOut.color
     private var chartCeiling: Double { max(downHistory.max() ?? 0, upHistory.max() ?? 0, 1) }
-    private var orbState: AIStatusOrb.State {
-        network.downloadBytesPerSec + network.uploadBytesPerSec >= 32_768 ? .active : .idle
-    }
-
     var body: some View {
-        Card(title: "Network", menuBarPin: menuBarItems.pin(.network), liveAccent: downColor,
-             orbState: orbState, orbStyle: .helix) {
-            KV(key: "↓ Download", value: formatRate(network.downloadBytesPerSec), valueColor: downColor)
-            KV(key: "↑ Upload", value: formatRate(network.uploadBytesPerSec), valueColor: upColor)
-        } graph: {
-            Sparkline([Trace(downHistory.map { $0 / chartCeiling }, downColor),
-                       Trace(upHistory.map { $0 / chartCeiling }, upColor)], role: .trend)
+        FlippableMetricCard(id: "network") {
+            Card(title: "Network", menuBarPin: menuBarItems.pin(.network)) {
+                KV(key: "↓ Download", value: formatRate(network.downloadBytesPerSec), valueColor: downColor)
+                KV(key: "↑ Upload", value: formatRate(network.uploadBytesPerSec), valueColor: upColor)
+            } graph: {
+                Sparkline([Trace(downHistory.map { $0 / chartCeiling }, downColor),
+                           Trace(upHistory.map { $0 / chartCeiling }, upColor)], role: .trend)
+            }
+        } back: {
+            NetworkMotionFace(download: network.downloadBytesPerSec,
+                              upload: network.uploadBytesPerSec, ceiling: chartCeiling)
         }
     }
 }
@@ -1236,49 +1229,50 @@ private struct DiskOverviewCard: View {
     private let readColor = Palette.flowIn.color
     private let writeColor = Palette.flowOut.color
     private var chartCeiling: Double { max(readHistory.max() ?? 0, writeHistory.max() ?? 0, 1) }
-    private var orbState: AIStatusOrb.State {
-        if disk.usedFraction >= 0.90 { return .constrained }
-        return disk.readBytesPerSec + disk.writeBytesPerSec >= 262_144 ? .active : .idle
-    }
     private var topWriter: ProcessRow? {
         processes.filter { $0.diskWriteBytesPerSec != nil }
             .max { ($0.diskWriteBytesPerSec ?? 0) < ($1.diskWriteBytesPerSec ?? 0) }
     }
 
     var body: some View {
-        Card(title: "Disk", menuBarPin: menuBarItems.pin(.disk), liveAccent: readColor,
-             orbState: orbState, orbStyle: .radar,
-             alert: disk.healthAlerts.isEmpty ? nil : Palette.State.critical.color) {
-            KV(key: "Read", value: formatRate(disk.readBytesPerSec), valueColor: readColor)
-            KV(key: "Write", value: formatRate(disk.writeBytesPerSec), valueColor: writeColor)
-            if onShowDetails != nil {
-                Button { onShowDetails?() } label: {
-                    HStack(spacing: Space.hair) {
-                        if let topWriter {
-                            Text("最忙").foregroundStyle(Theme.faint)
-                            Text(topWriter.name).foregroundStyle(Theme.text)
-                                .lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 0)
-                            Text(formatRate(topWriter.diskWriteBytesPerSec ?? 0))
-                                .foregroundStyle(writeColor)
-                        } else {
-                            Text("查看磁盘详情").foregroundStyle(Theme.dim)
-                            Spacer(minLength: 0)
+        FlippableMetricCard(id: "disk") {
+            Card(title: "Disk", menuBarPin: menuBarItems.pin(.disk),
+                 alert: disk.healthAlerts.isEmpty ? nil : Palette.State.critical.color) {
+                KV(key: "Read", value: formatRate(disk.readBytesPerSec), valueColor: readColor)
+                KV(key: "Write", value: formatRate(disk.writeBytesPerSec), valueColor: writeColor)
+                if onShowDetails != nil {
+                    Button { onShowDetails?() } label: {
+                        HStack(spacing: Space.hair) {
+                            if let topWriter {
+                                Text("最忙").foregroundStyle(Theme.faint)
+                                Text(topWriter.name).foregroundStyle(Theme.text)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer(minLength: 0)
+                                Text(formatRate(topWriter.diskWriteBytesPerSec ?? 0))
+                                    .foregroundStyle(writeColor)
+                            } else {
+                                Text("查看磁盘详情").foregroundStyle(Theme.dim)
+                                Spacer(minLength: 0)
+                            }
+                            Image(systemName: "chevron.right").foregroundStyle(Theme.faint)
                         }
-                        Image(systemName: "chevron.right").foregroundStyle(Theme.faint)
+                        .font(Theme.font(.detail))
+                        .contentShape(Rectangle())
                     }
-                    .font(Theme.font(.detail))
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .help("查看磁盘、健康度与进程读写排行")
                 }
-                .buttonStyle(.plain)
-                .help("查看磁盘、健康度与进程读写排行")
+                Bar(label: "Used", value: disk.usedFraction,
+                    detail: formatBytesOfTotal(disk.totalBytes - disk.freeBytes, disk.totalBytes),
+                    encoding: .state)
+            } graph: {
+                Sparkline([Trace(readHistory.map { $0 / chartCeiling }, readColor),
+                           Trace(writeHistory.map { $0 / chartCeiling }, writeColor)], role: .trend)
             }
-            Bar(label: "Used", value: disk.usedFraction,
-                detail: formatBytesOfTotal(disk.totalBytes - disk.freeBytes, disk.totalBytes),
-                encoding: .state)
-        } graph: {
-            Sparkline([Trace(readHistory.map { $0 / chartCeiling }, readColor),
-                       Trace(writeHistory.map { $0 / chartCeiling }, writeColor)], role: .trend)
+        } back: {
+            DiskMotionFace(read: disk.readBytesPerSec, write: disk.writeBytesPerSec,
+                           ceiling: chartCeiling, usedFraction: disk.usedFraction,
+                           healthy: disk.healthAlerts.isEmpty)
         }
     }
 }
@@ -1410,18 +1404,11 @@ private struct SensorsCard: View {
         }
     }
 
-    private var orbState: AIStatusOrb.State {
-        if thermal.isThrottling || temperature.groups.map(\.maximum).max() ?? 0 >= 95 {
-            return .constrained
-        }
-        return temperature.groups.isEmpty ? .idle : .active
-    }
-
     var body: some View {
-        Card(title: "Sensors", menuBarPin: menuBarItems.pin(.sensors),
-             liveAccent: pressureColor, orbState: orbState, orbStyle: .morph) {
-            VStack(alignment: .leading, spacing: Space.tight) {
-                if UIScale.current >= 1.75 {
+        FlippableMetricCard(id: "sensors") {
+            Card(title: "Sensors", menuBarPin: menuBarItems.pin(.sensors)) {
+                VStack(alignment: .leading, spacing: Space.tight) {
+                    if UIScale.current >= 1.75 {
                     // Tiny-display layout: pressure + fans share one line and every temperature
                     // group gets a visible summary tile. The old nested scroller received only
                     // ~one row at 225%, hiding GPU/Memory below CPU even though the card was tall.
@@ -1448,8 +1435,8 @@ private struct SensorsCard: View {
                             }
                         }
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: Space.hair) {
+                    } else {
+                        VStack(alignment: .leading, spacing: Space.hair) {
                         HStack(spacing: Space.row) {
                             Text("Pressure").font(Theme.font(.body)).foregroundStyle(Theme.dim)
                             Spacer(minLength: Space.row)
@@ -1466,34 +1453,34 @@ private struct SensorsCard: View {
                                 .lineLimit(1).minimumScaleFactor(0.75)
                         }
                     }
-                    Divider().overlay(Theme.border)
-                    if temperature.groups.isEmpty {
-                        Text("no sensors available")
-                            .font(Theme.font(.body)).foregroundStyle(Theme.dim)
-                        Spacer(minLength: 0)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: Space.hair) {
-                                ForEach(temperature.groups) { group in
-                                    SensorGroupRow(group: group, fahrenheit: fahrenheit)
+                        Divider().overlay(Theme.border)
+                        if temperature.groups.isEmpty {
+                            Text("no sensors available")
+                                .font(Theme.font(.body)).foregroundStyle(Theme.dim)
+                            Spacer(minLength: 0)
+                        } else {
+                            ScrollView {
+                                VStack(spacing: Space.hair) {
+                                    ForEach(temperature.groups) { group in
+                                        SensorGroupRow(group: group, fahrenheit: fahrenheit)
+                                    }
                                 }
                             }
+                            .frame(maxHeight: .infinity)
                         }
-                        .frame(maxHeight: .infinity)
                     }
                 }
+            } graph: {
+                // Normalised against `Theme.hotCelsius` so every group shares one thermal axis.
+                Sparkline(temperature.groups.compactMap { group in
+                    guard let series = groupHistory[group.category], series.count > 1 else { return nil }
+                    return Trace(series.map { min(1, $0 / Theme.hotCelsius) }, group.category.color)
+                }, role: .trend)
             }
-        } graph: {
-            // Normalised against `Theme.hotCelsius` so the traces keep `.trend`'s 0…1 axis, share
-            // ONE scale — which is what makes "the GPU runs hotter than the CPU" visible — and read
-            // as thermal headroom. Auto-scaling would stretch a flat 45 °C line to fill the chart
-            // and make an idle machine look like one in trouble.
-            // Colour is identity here, not state: with several lines the reader needs to know WHICH
-            // sensor group each one is, and the row's swatch says so.
-            Sparkline(temperature.groups.compactMap { group in
-                guard let series = groupHistory[group.category], series.count > 1 else { return nil }
-                return Trace(series.map { min(1, $0 / Theme.hotCelsius) }, group.category.color)
-            }, role: .trend)
+        } back: {
+            SensorsMotionFace(maximumCelsius: temperature.groups.map(\.maximum).max() ?? 0,
+                              rpm: thermal.fanRPMs.max() ?? 0,
+                              pressureLabel: thermalPressureLabel)
         }
     }
 }
@@ -1560,6 +1547,7 @@ private struct SensorGroupRow: View {
                 .minimumScaleFactor(0.68)
             }
         }
+        .animation(Motion.disclosure, value: expanded)
         .tint(Theme.dim)
     }
 }

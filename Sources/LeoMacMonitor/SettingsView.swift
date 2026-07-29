@@ -37,6 +37,7 @@ struct SettingsView: View {
     @AppStorage("shareThisMac") private var shareThisMac = false
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var agentToken: String?
+    @State private var tokenCopied = false
 
     var body: some View {
         Form {
@@ -136,10 +137,13 @@ struct SettingsView: View {
             Section {
                 Toggle("Connect to local AI runtimes", isOn: $aiRuntimeAPIEnabled)
                 if aiRuntimeAPIEnabled {
-                    TextField("Ollama port", value: $ollamaPort, format: .number.grouping(.never))
-                    TextField("LM Studio port", value: $lmStudioPort, format: .number.grouping(.never))
-                    TextField("oMLX port", value: $omlxPort, format: .number.grouping(.never))
-                    TextField("oMLX API Key (optional)", text: $omlxApiKey)
+                    Group {
+                        TextField("Ollama port", value: $ollamaPort, format: .number.grouping(.never))
+                        TextField("LM Studio port", value: $lmStudioPort, format: .number.grouping(.never))
+                        TextField("oMLX port", value: $omlxPort, format: .number.grouping(.never))
+                        TextField("oMLX API Key (optional)", text: $omlxApiKey)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             } header: {
                 Text("Local AI runtime API (opt-in)")
@@ -168,7 +172,16 @@ struct SettingsView: View {
                                 Button {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(token, forType: .string)
-                                } label: { Image(systemName: "doc.on.doc") }
+                                    tokenCopied = true
+                                    Task { @MainActor in
+                                        try? await Task.sleep(for: .seconds(1.4))
+                                        tokenCopied = false
+                                    }
+                                } label: {
+                                    Image(systemName: tokenCopied ? "checkmark" : "doc.on.doc")
+                                        .foregroundStyle(tokenCopied ? Palette.State.calm.color : Theme.text)
+                                        .contentTransition(.symbolEffect(.replace))
+                                }
                                     .buttonStyle(.borderless).help("Copy token")
                             }
                         }
@@ -184,6 +197,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: Layout.Surface.settingsWidth, height: aiRuntimeAPIEnabled ? Layout.Surface.settingsHeightExpanded : Layout.Surface.settingsHeight)
+        .animation(Motion.disclosure, value: aiRuntimeAPIEnabled)
+        .animation(Motion.disclosure, value: shareThisMac)
+        .animation(Motion.state, value: tokenCopied)
         .onAppear {
             if shareThisMac { agentToken = MacAgentController.shared.pairingToken }
         }

@@ -36,6 +36,8 @@ struct MenuBarView: View {
         .frame(width: compactGPU ? 480 : panelWidth, height: compactGPU ? 300 : 700)
         .background(Theme.bg)
         .foregroundStyle(Theme.text)
+        .animation(Motion.disclosure, value: showActivity)
+        .animation(Motion.disclosure, value: showDevices)
     }
 
     @ViewBuilder
@@ -169,11 +171,13 @@ struct MenuBarView: View {
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
+                .liveTextTransition(value)
             Text(detail)
                 .font(MenuBarTheme.font(.caption))
                 .foregroundStyle(Theme.dim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .liveTextTransition(detail)
             Sparkline(traces, role: .inline(height: 15, axis: axis))
         }
         .padding(11)

@@ -28,7 +28,11 @@ struct RecordBar: View {
                     Image(systemName: recording ? "stop.fill" : "record.circle.fill")
                         .foregroundStyle(.red)
                         .opacity(dim ? 0.35 : 1)
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(Motion.state, value: recording)
+                        .animation(.easeInOut(duration: 0.35), value: dim)
                     Text(recording ? "Stop" : "Record")
+                        .contentTransition(.opacity)
                 }
             }
             .buttonStyle(.plain)
@@ -67,6 +71,7 @@ struct RecordBar: View {
         .padding(.vertical, Space.row)
         .background(Theme.panel)
         .overlay(Rectangle().frame(height: Layout.hairline).foregroundStyle(Theme.border), alignment: .top)
+        .animation(Motion.state, value: recording)
     }
 
     private func toggle() {

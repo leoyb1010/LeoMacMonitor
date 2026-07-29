@@ -843,6 +843,8 @@ struct SSDMenuDropdown: View {
             MenuActionsFooter()
         }
         .modifier(MenuPopoverSurface(height: 700))
+        .animation(Motion.disclosure, value: showProcesses)
+        .animation(Motion.disclosure, value: showDevices)
     }
 
     private func volumeRow(_ v: VolumeInfo) -> some View {

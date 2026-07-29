@@ -33,6 +33,8 @@ struct ReplayBar: View {
             Button { c.stepBackward() } label: { Image(systemName: "backward.frame.fill") }.buttonStyle(.plain)
             Button { c.togglePlay() } label: {
                 Image(systemName: c.isPlaying ? "pause.fill" : "play.fill")
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(Motion.state, value: c.isPlaying)
             }.buttonStyle(.plain)
             Button { c.stepForward() } label: { Image(systemName: "forward.frame.fill") }.buttonStyle(.plain)
 
@@ -42,6 +44,7 @@ struct ReplayBar: View {
             Slider(value: Binding(get: { c.time }, set: { c.seek(toTime: $0) }),
                    in: 0...max(c.duration, 0.001))
                 .controlSize(.small)
+                .animation(Motion.data, value: c.time)
 
             Menu("\(speedText(c.speed))×") {
                 ForEach([0.5, 1.0, 2.0, 4.0], id: \.self) { sp in

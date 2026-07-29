@@ -70,6 +70,7 @@ private struct FleetTile: View {
         VStack(alignment: .leading, spacing: Space.row) {
             HStack(spacing: Space.row) {
                 Circle().fill(statusColor).frame(width: Layout.Dot.status, height: Layout.Dot.status)
+                    .animation(Motion.state, value: statusKey)
                 Text(hostname)
                     .font(.system(.callout, design: .monospaced).bold()).lineLimit(1)
                 Spacer()
@@ -77,7 +78,7 @@ private struct FleetTile: View {
             }
 
             if needsPairing {
-                spacerText("Pairing required", .orange)
+                spacerStatus("Pairing required", "lock.slash", .orange)
             } else if let m = metrics {
                 // A GPU is optional — a Raspberry Pi, CPU-only server or VM has none, and requiring
                 // one here left such a machine stuck on "Connecting…" even though it was reporting
@@ -101,9 +102,9 @@ private struct FleetTile: View {
                         .font(Theme.font(.caption)).foregroundStyle(loaded != nil ? .green : .secondary).lineLimit(1)
                 }
             } else if let e = error {
-                spacerText(e, .red)
+                spacerStatus(e, "exclamationmark.triangle.fill", .red)
             } else {
-                spacerText("Connecting…", .secondary)
+                spacerStatus("Connecting…", "antenna.radiowaves.left.and.right", .secondary, busy: true)
             }
         }
         .padding(Space.section)
@@ -111,6 +112,7 @@ private struct FleetTile: View {
         .background(RoundedRectangle(cornerRadius: Radius.card).fill(.quaternary.opacity(0.4)))
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        .animation(Motion.state, value: statusKey)
     }
 
     /// All tiles share one height; the charts flex to fill, so a 2-chart (Linux) and a 3-chart
@@ -176,11 +178,28 @@ private struct FleetTile: View {
         }.frame(maxWidth: .infinity)
     }
 
+    private func spacerStatus(_ text: String, _ symbol: String, _ color: Color, busy: Bool = false) -> some View {
+        VStack {
+            Spacer()
+            MotionStatusPill(label: text, systemImage: symbol, color: color, busy: busy)
+                .lineLimit(1).minimumScaleFactor(0.72)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var statusColor: Color {
         if needsPairing { return .orange }
         if metrics != nil { return .green }
         if error != nil { return .red }
         return .gray
+    }
+
+    private var statusKey: String {
+        if needsPairing { return "pairing" }
+        if metrics != nil { return "live" }
+        if error != nil { return "error" }
+        return "connecting"
     }
 
     private func gb(_ bytes: Int64) -> String { String(format: "%.1f GB", Double(bytes) / 1_073_741_824) }

@@ -107,6 +107,7 @@ private struct DeviceSidebarRow: View {
     var body: some View {
         HStack(spacing: Space.row) {
             Circle().fill(statusColor).frame(width: Layout.Dot.status, height: Layout.Dot.status)
+                .animation(Motion.state, value: statusKey)
             VStack(alignment: .leading, spacing: Space.hair) {
                 HStack(spacing: Space.tight) {
                     Text(entry.metrics?.hostname ?? entry.source.label)
@@ -121,6 +122,7 @@ private struct DeviceSidebarRow: View {
         }
         .contentShape(Rectangle())
         .padding(.vertical, Space.hair)
+        .animation(Motion.state, value: statusKey)
         .contextMenu {
             if !entry.needsPairing {
                 Button("Forget pairing", role: .destructive) { onUnpair(entry.source.label) }
@@ -143,5 +145,12 @@ private struct DeviceSidebarRow: View {
         if entry.metrics != nil { return .green }
         if entry.error != nil { return .red }
         return .gray
+    }
+
+    private var statusKey: String {
+        if entry.needsPairing { return "pairing" }
+        if entry.metrics != nil { return "live" }
+        if entry.error != nil { return "error" }
+        return "connecting"
     }
 }

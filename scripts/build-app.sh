@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.2.1}"
+VERSION="${1:-2.0.0}"
 SOURCE_APP="LeoMacMonitor"
 APP_EXECUTABLE="LeoMacMonitor"
 DISPLAY_NAME="${DISPLAY_NAME:-LeoMac监控器}"
@@ -26,8 +26,16 @@ CONFIG="${CONFIG:-release}"
 SIGN_ID="${SIGN_ID:--}"
 TEAM_ID="${TEAM_ID:-48H5Y3LNUK}"
 SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
-DIST="${DIST:-dist}"
-APPDIR="$DIST/$DISPLAY_NAME.app"
+# Keep the signed .app outside Documents/iCloud/FileProvider. Those providers can attach FinderInfo
+# again after this script exits and invalidate the embedded Widget signature. DMGs may still be
+# copied into the repository because their contents are immutable.
+OUTPUT_DIST="${DIST:-$HOME/Library/Caches/LeoMacMonitor/dist}"
+# Assemble and sign outside Documents/iCloud/FileProvider. Those providers may attach FinderInfo
+# to a nested .appex between the inner and outer codesign calls, invalidating the containing app.
+WORK_DIST="$(mktemp -d /tmp/leomac-app-build.XXXXXX)"
+trap 'rm -rf "$WORK_DIST"' EXIT
+DIST="$WORK_DIST"
+APPDIR="$WORK_DIST/$DISPLAY_NAME.app"
 ICON="Sources/$SOURCE_APP/Resources/AppIcon.icns"
 BRAND_BADGE="Sources/$SOURCE_APP/Resources/LeoFamilyBadge.png"
 
@@ -135,5 +143,12 @@ codesign --force --sign "$SIGN_ID" --timestamp=none --entitlements "$WIDGET_ENTI
 codesign --force --sign "$SIGN_ID" --timestamp=none "$APPDIR"
 codesign --verify --strict --verbose=2 "$APPDIR"
 
-echo "Built $APPDIR"
-echo "  Open with: open \"$APPDIR\""
+FINAL_APP="$OUTPUT_DIST/$DISPLAY_NAME.app"
+mkdir -p "$OUTPUT_DIST"
+rm -rf "$FINAL_APP"
+ditto "$APPDIR" "$FINAL_APP"
+xattr -cr "$FINAL_APP"
+codesign --verify --strict --verbose=2 "$FINAL_APP"
+
+echo "Built $FINAL_APP"
+echo "  Open with: open \"$FINAL_APP\""
