@@ -1,7 +1,7 @@
 //
 //  File:      main.swift
 //  Created:   2026-06-08
-//  Updated:   2026-07-15
+//  Updated:   2026-07-29
 //  Developer: Leo Yuan
 //  Overview:  Verification CLI for LeoMacMonitorCore. Prints sudoless power + CPU samples
 //             so we can confirm the data layer works in a real SwiftPM build.
@@ -70,12 +70,30 @@ print(String(format: "  headroom now %.1f GB · loadable %.1f GB", budget.headro
 print("  largest model that fits now: " + budget.fitsNow.map { $0.label }.joined(separator: " / "))
 
 let processes = ProcessSampler()
+let disks = DiskSampler()
 _ = processes.sample(top: 1)            // prime CPU% baseline
+_ = disks.sample()                       // prime device I/O counters + async health refresh
 try? await Task.sleep(for: .seconds(0.5))
 let allRows = processes.sample(top: .max)
+let diskSample = disks.sample()
 print("\ntop processes by CPU (no sudo):")
 for p in allRows.prefix(8) {
     print(String(format: "  %6d  %6.1f%%  %8.1f MB   %@", p.pid, p.cpuPercent, p.memoryMB, p.name))
+}
+print("\nphysical disks (no sudo):")
+if diskSample.physicalDevices.isEmpty { print("  none detected") }
+for d in diskSample.physicalDevices {
+    let location = d.isInternal.map { $0 ? "internal" : "external" } ?? "location pending"
+    let smart = d.health?.smartStatus ?? "health pending/unavailable"
+    print("  \(d.bsdName)  \(location)  \(d.name)  R \(Int(d.readBytesPerSec)) B/s  W \(Int(d.writeBytesPerSec)) B/s  \(smart)")
+}
+if let reader = allRows.filter({ $0.diskReadBytesPerSec != nil })
+    .max(by: { ($0.diskReadBytesPerSec ?? 0) < ($1.diskReadBytesPerSec ?? 0) }) {
+    print("  top reader: \(reader.name) \(Int(reader.diskReadBytesPerSec ?? 0)) B/s")
+}
+if let writer = allRows.filter({ $0.diskWriteBytesPerSec != nil })
+    .max(by: { ($0.diskWriteBytesPerSec ?? 0) < ($1.diskWriteBytesPerSec ?? 0) }) {
+    print("  top writer: \(writer.name) \(Int(writer.diskWriteBytesPerSec ?? 0)) B/s")
 }
 let ai = AIRuntimeSampler().sample(from: allRows)
 print("\nAI runtimes detected: \(ai.isActive ? "" : "none")")

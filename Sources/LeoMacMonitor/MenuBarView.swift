@@ -9,23 +9,31 @@ struct MenuBarView: View {
     @AppStorage("temperatureFahrenheit") private var fahrenheit = false
     @AppStorage("compactGPUMode") private var compactGPU = false
 
-    private let panelWidth: CGFloat = 430
+    @State private var showActivity = true
+    @State private var showDevices = false
+
+    private let panelWidth: CGFloat = 560
     private let gap: CGFloat = 8
 
     var body: some View {
         let snapshot = monitor.snapshot
-        VStack(alignment: .leading, spacing: 10) {
-            if compactGPU {
-                compactGPURow(snapshot)
-            } else {
-                cockpit(snapshot)
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if compactGPU {
+                        compactGPURow(snapshot)
+                    } else {
+                        cockpit(snapshot)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Divider()
             actions
         }
-        .padding(14)
-        .frame(width: compactGPU ? 360 : panelWidth)
+        .padding(18)
+        .frame(width: compactGPU ? 480 : panelWidth, height: compactGPU ? 300 : 700)
         .background(Theme.bg)
         .foregroundStyle(Theme.text)
     }
@@ -89,7 +97,25 @@ struct MenuBarView: View {
         }
 
         acceleratorStrip(s)
-        busyProcesses(s)
+
+        DisclosureGroup(isExpanded: $showActivity) {
+            VStack(alignment: .leading, spacing: 10) {
+                busyProcesses(s)
+                diskProcessRows(s)
+            }
+            .padding(.top, 8)
+        } label: {
+            Label("进程与磁盘活动", systemImage: "waveform.path.ecg.rectangle")
+                .font(MenuBarTheme.font(.body, .strong)).foregroundStyle(Theme.accent)
+        }
+
+        DisclosureGroup(isExpanded: $showDevices) {
+            deviceHealthRows(s)
+                .padding(.top, 8)
+        } label: {
+            Label("物理磁盘与健康度", systemImage: "internaldrive")
+                .font(MenuBarTheme.font(.body, .strong)).foregroundStyle(Theme.accent)
+        }
     }
 
     private func header(_ s: SystemSnapshot) -> some View {
@@ -150,8 +176,8 @@ struct MenuBarView: View {
                 .minimumScaleFactor(0.7)
             Sparkline(traces, role: .inline(height: 15, axis: axis))
         }
-        .padding(9)
-        .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+        .padding(11)
+        .frame(maxWidth: .infinity, minHeight: 102, alignment: .topLeading)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.border, lineWidth: 1))
     }
@@ -213,6 +239,68 @@ struct MenuBarView: View {
                         .frame(maxWidth: .infinity)
                         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 7))
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func diskProcessRows(_ s: SystemSnapshot) -> some View {
+        let rows: [(label: String, process: ProcessRow, color: Color, rate: Double)] = [
+            s.topDiskReader.map { ("读取", $0, MetricPalette.downC, $0.diskReadBytesPerSec ?? 0) },
+            s.topDiskWriter.map { ("写入", $0, MetricPalette.upC, $0.diskWriteBytesPerSec ?? 0) },
+        ].compactMap { $0 }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("磁盘高负载进程（五秒平滑）")
+                .font(MenuBarTheme.font(.caption, .strong)).foregroundStyle(Theme.faint)
+            if rows.isEmpty {
+                Text("正在建立采样…").font(MenuBarTheme.font(.body)).foregroundStyle(Theme.dim)
+            } else {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 8) {
+                        Text(row.label)
+                            .font(MenuBarTheme.font(.detail, .strong))
+                            .foregroundStyle(row.color)
+                        Text(row.process.name).font(MenuBarTheme.font(.body))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(formatRate(row.rate))
+                            .font(MenuBarTheme.font(.body, .strong))
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deviceHealthRows(_ s: SystemSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if s.disk.physicalDevices.isEmpty {
+                Text("暂未取得物理磁盘信息").font(MenuBarTheme.font(.body)).foregroundStyle(Theme.dim)
+            } else {
+                ForEach(s.disk.physicalDevices) { device in
+                    HStack(spacing: 9) {
+                        Image(systemName: device.isInternal == false ? "externaldrive" : "internaldrive")
+                            .foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(device.name).font(MenuBarTheme.font(.body, .strong)).lineLimit(1)
+                            Text("\(device.bsdName) · 读 \(formatRate(device.readBytesPerSec)) · 写 \(formatRate(device.writeBytesPerSec))")
+                                .font(MenuBarTheme.font(.caption)).foregroundStyle(Theme.faint).lineLimit(1)
+                        }
+                        Spacer(minLength: 6)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(device.health?.smartStatus ?? "SMART 不可用")
+                                .font(MenuBarTheme.font(.detail, .strong))
+                            if let c = device.health?.temperatureCelsius {
+                                Text(String(format: "%.0f °C", c)).font(MenuBarTheme.font(.caption))
+                            }
+                        }
+                        .foregroundStyle(device.health?.assessment.isWarning == true ? Palette.State.critical.color : Theme.dim)
+                    }
+                    .padding(10).background(Theme.panel, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
                 }
             }
         }

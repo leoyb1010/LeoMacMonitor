@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.1.0}"
+VERSION="${1:-1.2.0}"
 SOURCE_APP="LeoMacMonitor"
 APP_EXECUTABLE="LeoMacMonitor"
 DISPLAY_NAME="${DISPLAY_NAME:-LeoMac监控器}"
@@ -21,7 +21,8 @@ CONFIG="${CONFIG:-release}"
 # macOS Local Network / TCC privacy (the Fleet view's mDNS + HTTP), ad-hoc signatures have an
 # unstable designated requirement that TCC won't track — set SIGN_ID to a Developer ID Application
 # identity so the app gets a stable identity and the Local Network prompt actually appears:
-#   SIGN_ID="Apple Development: leo yuan (54UB8X9C5F)" scripts/build-app.sh
+# If more than one certificate has the same label, pass the certificate SHA-1 instead of its name.
+#   SIGN_ID="1082E6E97B4ADD052348041B0E960C25B7E0C370" scripts/build-app.sh
 SIGN_ID="${SIGN_ID:--}"
 TEAM_ID="${TEAM_ID:-48H5Y3LNUK}"
 SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
@@ -44,6 +45,8 @@ mkdir -p "$APPDIR/Contents/MacOS" "$APPDIR/Contents/Resources"
 
 cp "$BIN" "$APPDIR/Contents/MacOS/$APP_EXECUTABLE"
 cp "$ICON" "$APPDIR/Contents/Resources/AppIcon.icns"
+[ -f "THIRD_PARTY_NOTICES.md" ] && cp "THIRD_PARTY_NOTICES.md" "$APPDIR/Contents/Resources/ThirdPartyNotices.md"
+[ -f "LICENSE" ] && cp "LICENSE" "$APPDIR/Contents/Resources/LICENSE.txt"
 [ -f "$BRAND_BADGE" ] && cp "$BRAND_BADGE" "$APPDIR/Contents/Resources/LeoFamilyBadge.png"
 # SwiftUI resolves app-localized UI strings from the main bundle. SwiftPM keeps resources in a
 # nested bundle, so copy localization folders to Contents/Resources as well for packaged builds.

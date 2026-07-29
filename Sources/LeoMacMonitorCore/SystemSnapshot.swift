@@ -1,7 +1,7 @@
 //
 //  File:      SystemSnapshot.swift
 //  Created:   2026-06-08
-//  Updated:   2026-06-25
+//  Updated:   2026-07-29
 //  Developer: Leo Yuan
 //  Overview:  One unified reading of every LeoMacMonitor metric, produced by SystemSampler
 //             and consumed by the UI. Pure value type (Sendable).
@@ -77,6 +77,19 @@ public struct SystemSnapshot: Sendable, Codable {
         return gpuComputeBusy ? "in-app / unmanaged" : "none"
     }
 
+    /// Highest sustained process I/O rates from ProcessSampler's five-second smoothing window.
+    /// These are process-wide totals across storage devices; they must not be presented as
+    /// attribution to any one physical disk.
+    public var topDiskReader: ProcessRow? {
+        processes.filter { $0.diskReadBytesPerSec != nil }
+            .max { ($0.diskReadBytesPerSec ?? 0) < ($1.diskReadBytesPerSec ?? 0) }
+    }
+
+    public var topDiskWriter: ProcessRow? {
+        processes.filter { $0.diskWriteBytesPerSec != nil }
+            .max { ($0.diskWriteBytesPerSec ?? 0) < ($1.diskWriteBytesPerSec ?? 0) }
+    }
+
     public struct Warning: Sendable, Identifiable, Equatable {
         public enum Level: Sendable, Equatable { case warning, critical }
         public let level: Level
@@ -102,6 +115,25 @@ public struct SystemSnapshot: Sendable, Codable {
         case .critical: result.append(.init(level: .critical, message: "Memory pressure: critical"))
         case .warning:  result.append(.init(level: .warning, message: "Memory pressure: elevated"))
         case .normal:   break
+        }
+        for device in disk.healthAlerts {
+            guard let assessment = device.health?.assessment else { continue }
+            let level: Warning.Level = switch assessment {
+            case .spareBelowThreshold: .warning
+            case .verified, .partial: .warning
+            case .temperatureWarning, .deviceWarning, .mediaErrors, .smartFailure: .critical
+            }
+            let reason: String = switch assessment {
+            case .temperatureWarning: "温度警告"
+            case .deviceWarning: "设备警告"
+            case .spareBelowThreshold: "备用空间低于阈值"
+            case .mediaErrors: "检测到介质错误"
+            case .smartFailure: "SMART 故障"
+            case .verified, .partial: ""
+            }
+            if !reason.isEmpty {
+                result.append(.init(level: level, message: "磁盘 \(device.name)：\(reason)"))
+            }
         }
         // Note: a predictive "swapping now" warning is rate-based and lives on the monitor
         // (memoryRisk → Dashboard banner). swapUsedBytes is cumulative/sticky, so it is not

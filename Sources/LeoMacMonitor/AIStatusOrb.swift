@@ -18,14 +18,14 @@ struct AIStatusOrb: View {
     let state: State
     let style: Style
     let color: Color
-    var size: CGFloat = 27
+    var size: CGFloat = 34
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    private var frameInterval: TimeInterval { state == .idle ? 1 / 8 : 1 / 18 }
+    private var frameInterval: TimeInterval { state == .idle ? 1 / 12 : 1 / 24 }
     private var speed: CGFloat {
-        switch state { case .idle: 0.28; case .active: 1.15; case .constrained: 0.62 }
+        switch state { case .idle: 0.52; case .active: 1.15; case .constrained: 0.78 }
     }
 
     var body: some View {
@@ -53,7 +53,7 @@ struct AIStatusOrb: View {
     private func draw(in context: inout GraphicsContext, size: CGSize, time: CGFloat) {
         let side = min(size.width, size.height)
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let radius = side * 0.39
+        let radius = side * 0.41
         glow(in: &context, center: center, radius: radius, time: time)
 
         let dots: [Dot] = switch style {
@@ -70,19 +70,23 @@ struct AIStatusOrb: View {
     }
 
     private func glow(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, time: CGFloat) {
-        let breath = reduceMotion ? 0.55 : 0.52 + 0.18 * sin(time * 1.7)
+        let breath = reduceMotion ? 0.65 : 0.62 + 0.24 * sin(time * 1.45)
         let rect = CGRect(x: center.x - radius * 0.72, y: center.y - radius * 0.72,
                           width: radius * 1.44, height: radius * 1.44)
         context.fill(Path(ellipseIn: rect), with: .radialGradient(
-            Gradient(colors: [color.opacity(0.13 + breath * 0.08), color.opacity(0)]),
+            Gradient(colors: [color.opacity(0.20 + breath * 0.11), color.opacity(0)]),
             center: center, startRadius: 0, endRadius: radius * 0.78))
     }
 
     private func paint(_ dots: [Dot], in context: inout GraphicsContext) {
         for dot in dots.sorted(by: { $0.depth < $1.depth }) {
-            let r = dot.radius * (dot.hot ? 1.45 : 1)
+            let r = max(0.82, dot.radius * 1.28) * (dot.hot ? 1.52 : 1)
             let rect = CGRect(x: dot.point.x - r, y: dot.point.y - r, width: r * 2, height: r * 2)
-            context.fill(Path(ellipseIn: rect), with: .color(color.opacity(dot.hot ? 0.96 : dot.alpha)))
+            let halo = rect.insetBy(dx: -r * 0.72, dy: -r * 0.72)
+            context.fill(Path(ellipseIn: halo),
+                         with: .color(color.opacity(dot.hot ? 0.24 : 0.10)))
+            context.fill(Path(ellipseIn: rect),
+                         with: .color(color.opacity(dot.hot ? 1.0 : max(0.48, dot.alpha))))
         }
     }
 

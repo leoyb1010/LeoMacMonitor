@@ -1,7 +1,7 @@
 //
 //  File:      ProcessSampler.swift
 //  Created:   2026-06-08
-//  Updated:   2026-07-14
+//  Updated:   2026-07-29
 //  Developer: Leo Yuan
 //  Overview:  Builds the process table sudolessly via libproc. Stateful: each
 //             sample() diffs cumulative CPU time against the previous call to derive
@@ -19,6 +19,24 @@ import Foundation
 public final class ProcessSampler {
     private var previousCPU: [pid_t: UInt64] = [:]
     private var previousTimeNs: UInt64 = 0
+
+    private struct ProcessIdentity: Hashable {
+        let pid: pid_t
+        let startAbstime: UInt64
+    }
+    private struct DiskCounters {
+        let read: UInt64
+        let write: UInt64
+    }
+    private struct DiskRates {
+        let read: Double
+        let write: Double
+    }
+    private var previousDisk: [ProcessIdentity: DiskCounters] = [:]
+    private var smoothedDisk: [ProcessIdentity: DiskRates] = [:]
+    /// Approximately five seconds of damping keeps the "top writer" useful instead of letting
+    /// one metadata burst reshuffle the UI every process-enumeration tick.
+    private static let diskSmoothingWindow: TimeInterval = 5
 
     // Immutable per-pid metadata (executable path, name, basename) cached across ticks — these
     // never change for a process's lifetime, so re-resolving them every tick via proc_pidpath /
@@ -51,6 +69,8 @@ public final class ProcessSampler {
         let wallDelta = previousTimeNs > 0 ? Double(nowNs &- previousTimeNs) : 0
 
         var currentCPU: [pid_t: UInt64] = [:]
+        var currentDisk: [ProcessIdentity: DiskCounters] = [:]
+        var currentSmoothedDisk: [ProcessIdentity: DiskRates] = [:]
         var rows: [ProcessRow] = []
 
         for pid in Self.allPIDs() where pid > 0 {
@@ -87,17 +107,48 @@ public final class ProcessSampler {
                 args = argv.joined(separator: " ")
             }
 
+            let usage = Self.resourceUsage(pid)
+            var readRate: Double? = nil
+            var writeRate: Double? = nil
+            if let usage {
+                let identity = ProcessIdentity(pid: pid, startAbstime: usage.startAbstime)
+                let counters = DiskCounters(read: usage.read, write: usage.write)
+                currentDisk[identity] = counters
+                if let old = previousDisk[identity], wallDelta > 0 {
+                    let instantaneous = DiskRates(
+                        read: Double(usage.read >= old.read ? usage.read - old.read : 0) / (wallDelta / 1_000_000_000),
+                        write: Double(usage.write >= old.write ? usage.write - old.write : 0) / (wallDelta / 1_000_000_000)
+                    )
+                    let alpha = min(1, (wallDelta / 1_000_000_000) / Self.diskSmoothingWindow)
+                    let prior = smoothedDisk[identity] ?? instantaneous
+                    let smoothed = DiskRates(
+                        read: prior.read + alpha * (instantaneous.read - prior.read),
+                        write: prior.write + alpha * (instantaneous.write - prior.write)
+                    )
+                    currentSmoothedDisk[identity] = smoothed
+                    readRate = smoothed.read
+                    writeRate = smoothed.write
+                }
+            }
+
             rows.append(ProcessRow(
                 pid: pid,
                 name: meta.name,
                 cpuPercent: cpuPercent,
                 memoryBytes: info.pti_resident_size,
                 path: meta.path,
-                args: args
+                args: args,
+                diskReadBytes: usage?.read,
+                diskWriteBytes: usage?.write,
+                diskReadBytesPerSec: readRate,
+                diskWriteBytesPerSec: writeRate,
+                startAbstime: usage?.startAbstime
             ))
         }
 
         previousCPU = currentCPU
+        previousDisk = currentDisk
+        smoothedDisk = currentSmoothedDisk
         previousTimeNs = nowNs
         // Drop cached metadata for pids that are gone so the cache can't grow unbounded.
         let live = Set(currentCPU.keys)
@@ -123,6 +174,17 @@ public final class ProcessSampler {
         let size = Int32(MemoryLayout<proc_taskinfo>.size)
         let result = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, size)
         return result == size ? info : nil
+    }
+
+    private static func resourceUsage(_ pid: pid_t) -> (startAbstime: UInt64, read: UInt64, write: UInt64)? {
+        var info = rusage_info_v6()
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                proc_pid_rusage(pid, RUSAGE_INFO_V6, $0)
+            }
+        }
+        guard result == 0, info.ri_proc_exit_abstime == 0 else { return nil }
+        return (info.ri_proc_start_abstime, info.ri_diskio_bytesread, info.ri_diskio_byteswritten)
     }
 
     private static func name(_ pid: pid_t) -> String {

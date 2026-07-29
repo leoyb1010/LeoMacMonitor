@@ -341,14 +341,14 @@ enum MenuBarTheme {
 
     private static func size(_ role: Theme.Role) -> CGFloat {
         switch role {
-        case .sectionMajor: return 9.5
-        case .sectionMinor: return 9
-        case .sectionMenu: return 10
-        case .caption: return 9
-        case .detail: return 10.5
-        case .body: return 11
-        case .emphasis: return 12
-        case .headline: return 14
+        case .sectionMajor: return 12
+        case .sectionMinor: return 11.5
+        case .sectionMenu: return 12.5
+        case .caption: return 11.5
+        case .detail: return 12.5
+        case .body: return 13.5
+        case .emphasis: return 15
+        case .headline: return 18
         }
     }
 
@@ -627,13 +627,13 @@ enum Layout {
     /// Window, sheet and popover sizes.
     enum Surface {
         /// Per-metric menu-bar dropdowns (7 call sites, all identical).
-        static let dropdownWidth: CGFloat = 300
+        static let dropdownWidth: CGFloat = 420
         /// Ceiling for a scrolling list inside a dropdown (the sensor list), so a machine with
         /// many sensors cannot grow the popover past the screen.
-        static let dropdownScrollMax: CGFloat = 360
+        static let dropdownScrollMax: CGFloat = 480
         /// Combined "SS" dropdown — wider when the compact GPU layout is on.
-        static let combinedWidth: CGFloat = 350
-        static let combinedWidthCompactGPU: CGFloat = 360
+        static let combinedWidth: CGFloat = 560
+        static let combinedWidthCompactGPU: CGFloat = 480
         static var inspector: CGSize { CGSize(width: UIScale.scaled(460), height: UIScale.scaled(640)) }
         static var settingsWidth: CGFloat { 400 }
         static var settingsHeight: CGFloat { 710 }
@@ -919,7 +919,7 @@ struct Card<Content: View, Graph: View>: View {
                 if let liveAccent {
                     if let orbState {
                         AIStatusOrb(state: orbState, style: orbStyle, color: liveAccent,
-                                    size: min(UIScale.scaled(27), 29))
+                                    size: min(UIScale.scaled(34), 36))
                     } else {
                         LiveSignalMark(color: liveAccent)
                     }
@@ -1259,7 +1259,7 @@ struct PopoverButtonStyle: ButtonStyle {
                 .font(MenuBarTheme.font(.emphasis))
                 .foregroundStyle(Theme.text)
                 .frame(maxWidth: .infinity)
-                .frame(height: 28)
+                .frame(height: 36)
                 .background(fill(pressed: pressed), in: RoundedRectangle(cornerRadius: Radius.control))
                 .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(stroke, lineWidth: 1))
                 .contentShape(RoundedRectangle(cornerRadius: Radius.control))

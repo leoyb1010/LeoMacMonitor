@@ -444,6 +444,23 @@ struct MenuSectionHeader: View {
     }
 }
 
+/// Fixed-size, independently-scaled menu surface. It deliberately owns its own vertical scroll:
+/// dashboard zoom may be 250%, but a normal-display status popover stays readable and complete.
+private struct MenuPopoverSurface: ViewModifier {
+    let height: CGFloat
+    func body(content: Content) -> some View {
+        ScrollView {
+            content
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(width: Layout.Surface.dropdownWidth, height: height)
+        .background(Theme.bg)
+        .foregroundStyle(Theme.text)
+    }
+}
+
 // MARK: - CPU dropdown
 
 struct CPUMenuDropdown: View {
@@ -485,7 +502,7 @@ struct CPUMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 650))
     }
 
     private func coreRow(_ label: String, _ v: Double, _ pct: Double, _ mhz: Double, _ color: Color) -> some View {
@@ -596,7 +613,7 @@ struct GPUMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 500))
     }
 }
 
@@ -680,7 +697,7 @@ struct MEMMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 700))
     }
 }
 
@@ -736,7 +753,7 @@ struct NETMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 620))
     }
 
     private func ifaceIcon(_ i: InterfaceInfo) -> String {
@@ -756,6 +773,8 @@ struct SSDMenuDropdown: View {
     @AppStorage(UIScale.densityKey) private var uiDensity = Density.standard.rawValue
     let monitor: LeoMacMonitorMonitor
     private let cyan = Palette.bandwidth.color
+    @State private var showDevices = true
+    @State private var showProcesses = true
     var body: some View {
         let d = monitor.snapshot.disk
         let vols = VolumeSampler.sample()
@@ -775,10 +794,55 @@ struct SSDMenuDropdown: View {
             Sparkline(monitor.history.diskRead, color: MetricPalette.downC, role: .inline(height: Layout.Meter.sparklinePair))
             MenuKV(label: "Write", value: formatRate(d.writeBytesPerSec), color: MetricPalette.upC)
             Sparkline(monitor.history.diskWrite, color: MetricPalette.upC, role: .inline(height: Layout.Meter.sparklinePair))
+
+            Divider()
+            DisclosureGroup(isExpanded: $showProcesses) {
+                let ranked = monitor.snapshot.processes
+                    .filter { ($0.diskTotalBytesPerSec ?? 0) > 0 }
+                    .sorted { ($0.diskTotalBytesPerSec ?? 0) > ($1.diskTotalBytesPerSec ?? 0) }
+                VStack(spacing: 7) {
+                    if ranked.isEmpty {
+                        Text("正在建立五秒平滑采样…")
+                            .font(MenuBarTheme.font(.detail)).foregroundStyle(Theme.dim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(Array(ranked.prefix(6))) { process in
+                            HStack(spacing: 8) {
+                                Text(process.name).font(MenuBarTheme.font(.body))
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer(minLength: 4)
+                                Text("读 \(formatRate(process.diskReadBytesPerSec ?? 0))")
+                                    .font(MenuBarTheme.font(.detail)).foregroundStyle(MetricPalette.downC)
+                                Text("写 \(formatRate(process.diskWriteBytesPerSec ?? 0))")
+                                    .font(MenuBarTheme.font(.detail)).foregroundStyle(MetricPalette.upC)
+                            }
+                        }
+                    }
+                }.padding(.top, 8)
+            } label: {
+                Label("进程读写排行", systemImage: "list.number")
+                    .font(MenuBarTheme.font(.body, .strong)).foregroundStyle(Theme.accent)
+            }
+
+            Divider()
+            DisclosureGroup(isExpanded: $showDevices) {
+                VStack(spacing: 10) {
+                    if d.physicalDevices.isEmpty {
+                        Text("暂未取得物理磁盘信息")
+                            .font(MenuBarTheme.font(.detail)).foregroundStyle(Theme.dim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ForEach(d.physicalDevices) { device in physicalDeviceRow(device) }
+                    }
+                }.padding(.top, 8)
+            } label: {
+                Label("物理磁盘与健康度", systemImage: "internaldrive")
+                    .font(MenuBarTheme.font(.body, .strong)).foregroundStyle(Theme.accent)
+            }
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 700))
     }
 
     private func volumeRow(_ v: VolumeInfo) -> some View {
@@ -799,6 +863,33 @@ struct SSDMenuDropdown: View {
                 }
             }.frame(height: Layout.Meter.bar)
         }
+    }
+
+    private func physicalDeviceRow(_ device: DiskDeviceSample) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: device.isInternal == false ? "externaldrive" : "internaldrive")
+                    .foregroundStyle(Theme.accent)
+                Text(device.name).font(MenuBarTheme.font(.body, .strong))
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(device.health?.smartStatus ?? "SMART 不可用")
+                    .font(MenuBarTheme.font(.caption, .strong))
+                    .foregroundStyle(device.health?.assessment.isWarning == true ? Palette.State.critical.color : Theme.dim)
+            }
+            HStack {
+                Text("\(device.bsdName) · \(device.isInternal.map { $0 ? "内置" : "外置" } ?? "位置检测中")")
+                Spacer()
+                if let temp = device.health?.temperatureCelsius { Text(String(format: "%.0f °C", temp)) }
+                if let wear = device.health?.percentageUsed { Text("寿命消耗 \(wear)%") }
+            }
+            .font(MenuBarTheme.font(.caption)).foregroundStyle(Theme.faint)
+            Text("读 \(formatRate(device.readBytesPerSec)) · 写 \(formatRate(device.writeBytesPerSec))")
+                .font(MenuBarTheme.font(.detail)).foregroundStyle(Theme.dim)
+        }
+        .padding(10)
+        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.border))
     }
 }
 
@@ -865,7 +956,7 @@ struct SensorsMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 700))
     }
 
     private func fanLabel(_ idx: Int, count: Int) -> String {
@@ -1007,7 +1098,7 @@ struct BatteryMenuDropdown: View {
             Divider()
             MenuActionsFooter()
         }
-        .padding(.horizontal, Space.section).padding(.vertical, Space.card).frame(width: Layout.Surface.dropdownWidth).background(Theme.bg).foregroundStyle(Theme.text)
+        .modifier(MenuPopoverSurface(height: 680))
     }
 }
 

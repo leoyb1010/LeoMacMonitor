@@ -79,6 +79,7 @@ struct DashboardContainer: View {
     @State private var loadError: String?
     @State private var dashVisible = true        // false when the window is occluded or minimized
     @State private var frozen: DashboardState?   // last live frame, shown (not re-rendered) while hidden
+    @State private var showDiskDetails = false
 
     var body: some View {
         content
@@ -99,6 +100,9 @@ struct DashboardContainer: View {
                                         set: { if !$0 { monitor.endFocus() } })) {
                 InspectorView(monitor: monitor)
             }
+            .sheet(isPresented: $showDiskDetails) {
+                DiskDetailView(monitor: monitor)
+            }
     }
 
     @ViewBuilder private var content: some View {
@@ -110,7 +114,8 @@ struct DashboardContainer: View {
         } else if dashVisible {
             DashboardView(state: DashboardState(live: monitor),
                           onBenchmark: { Task { await monitor.runBenchmark() } },
-                          onInspect: { monitor.focus($0.pid) })
+                          onInspect: { monitor.focus($0.pid) },
+                          onShowDiskDetails: { showDiskDetails = true })
                 .safeAreaInset(edge: .bottom, spacing: Space.none) { RecordBar(monitor: monitor) }
         } else {
             // Off-screen: render the frozen last frame, reading nothing from the monitor, so
@@ -154,6 +159,7 @@ struct DashboardView: View {
     var mode: DashboardMode = .local
     var onBenchmark: (() -> Void)? = nil   // nil → replay: hides the benchmark control + process kill
     var onInspect: ((ProcessRow) -> Void)? = nil   // nil → replay: process inspection disabled
+    var onShowDiskDetails: (() -> Void)? = nil
     @State private var dismissedWarnings: Set<String> = []   // user-dismissed warnings (until the episode ends)
     @State private var shownWarnings: [SystemSnapshot.Warning] = []   // DEBOUNCED (lingering) set actually displayed
     @State private var warningClearTask: Task<Void, Never>? = nil     // pending "hide after linger" task
@@ -237,8 +243,10 @@ struct DashboardView: View {
                                         downHistory: s.history.netDown,
                                         upHistory: s.history.netUp)
                     DiskOverviewCard(disk: snapshot.disk,
+                                     processes: snapshot.processes,
                                      readHistory: s.history.diskRead,
-                                     writeHistory: s.history.diskWrite)
+                                     writeHistory: s.history.diskWrite,
+                                     onShowDetails: onShowDiskDetails)
                 }
                 .frame(height: Layout.Row.overviewGrid)
 
@@ -1211,8 +1219,10 @@ private struct NetworkOverviewCard: View {
 
 private struct DiskOverviewCard: View {
     let disk: DiskSample
+    let processes: [ProcessRow]
     let readHistory: [Double]
     let writeHistory: [Double]
+    var onShowDetails: (() -> Void)?
     @ObservedObject private var menuBarItems = MenuBarItemsModel.shared
 
     private let readColor = Palette.flowIn.color
@@ -1222,12 +1232,39 @@ private struct DiskOverviewCard: View {
         if disk.usedFraction >= 0.90 { return .constrained }
         return disk.readBytesPerSec + disk.writeBytesPerSec >= 262_144 ? .active : .idle
     }
+    private var topWriter: ProcessRow? {
+        processes.filter { $0.diskWriteBytesPerSec != nil }
+            .max { ($0.diskWriteBytesPerSec ?? 0) < ($1.diskWriteBytesPerSec ?? 0) }
+    }
 
     var body: some View {
         Card(title: "Disk", menuBarPin: menuBarItems.pin(.disk), liveAccent: readColor,
-             orbState: orbState, orbStyle: .radar) {
+             orbState: orbState, orbStyle: .radar,
+             alert: disk.healthAlerts.isEmpty ? nil : Palette.State.critical.color) {
             KV(key: "Read", value: formatRate(disk.readBytesPerSec), valueColor: readColor)
             KV(key: "Write", value: formatRate(disk.writeBytesPerSec), valueColor: writeColor)
+            if onShowDetails != nil {
+                Button { onShowDetails?() } label: {
+                    HStack(spacing: Space.hair) {
+                        if let topWriter {
+                            Text("最忙").foregroundStyle(Theme.faint)
+                            Text(topWriter.name).foregroundStyle(Theme.text)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 0)
+                            Text(formatRate(topWriter.diskWriteBytesPerSec ?? 0))
+                                .foregroundStyle(writeColor)
+                        } else {
+                            Text("查看磁盘详情").foregroundStyle(Theme.dim)
+                            Spacer(minLength: 0)
+                        }
+                        Image(systemName: "chevron.right").foregroundStyle(Theme.faint)
+                    }
+                    .font(Theme.font(.detail))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("查看磁盘、健康度与进程读写排行")
+            }
             Bar(label: "Used", value: disk.usedFraction,
                 detail: formatBytesOfTotal(disk.totalBytes - disk.freeBytes, disk.totalBytes),
                 encoding: .state)
