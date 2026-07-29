@@ -604,9 +604,10 @@ enum Layout {
         /// eight cards aligned while their graphs absorb any remaining vertical room.
         // Above 115% the text keeps growing while the row stops. Graphs yield their spare room
         // first, which preserves two complete rows on a 768-pt auxiliary display.
-        // 1.2.1: give the complete 4 × 2 instrument area 10% more vertical breathing room
-        // without changing its four-column footprint on the 1280 × 720 auxiliary display.
-        static var overviewGrid: CGFloat { min(UIScale.scaled(209), 242) }
+        // 2.1.0: extend each overview row another ~6.5% so the large motion faces and breathing
+        // watermarks have more stage depth. Width, column tracks and inter-row spacing stay fixed;
+        // the AI runtime/process row simply begins lower on the 1280 × 720 auxiliary display.
+        static var overviewGrid: CGFloat { min(UIScale.scaled(209), 258) }
         /// AI cockpit pair — **minHeight**. Content-driven, both cards are short.
         static var aiCockpit: CGFloat { UIScale.scaled(108) }
         /// SensorsCard in the narrow/remote variant — **minHeight**.

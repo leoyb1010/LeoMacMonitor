@@ -195,11 +195,55 @@ struct MotionCardFace<Visual: View>: View {
                 Theme.panel
                 RadialGradient(colors: [accent.opacity(0.13), Color.clear],
                                center: .center, startRadius: 0, endRadius: 180)
+                MotionWatermark(title: title, accent: accent)
             }
         }
         .overlay(RoundedRectangle(cornerRadius: Radius.card)
             .strokeBorder(accent.opacity(0.26), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+    }
+}
+
+/// Upright, slow-breathing identity type behind each large visual. Core Animation handles the
+/// opacity cycle, so it does not add another Canvas redraw loop or disturb the foreground phase.
+private struct MotionWatermark: View {
+    let title: String
+    let accent: Color
+
+    @Environment(\.metricMotionActive) private var active
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var restingOpacity: Double { colorScheme == .dark ? 0.035 : 0.025 }
+    private var peakOpacity: Double { colorScheme == .dark ? 0.22 : 0.20 }
+
+    var body: some View {
+        Group {
+            if active && !reduceMotion {
+                PhaseAnimator([0.0, 1.0]) { phase in
+                    label.opacity(restingOpacity + (peakOpacity - restingOpacity) * phase)
+                } animation: { _ in
+                    .easeInOut(duration: 3.4)
+                }
+            } else {
+                label.opacity(reduceMotion ? peakOpacity * 0.72 : restingOpacity)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var label: some View {
+        Text(LocalizedStringKey(title))
+            .textCase(.uppercase)
+            .font(.system(size: min(UIScale.scaled(48), 76), weight: .black, design: .rounded))
+            .tracking(-1.2)
+            .foregroundStyle(accent)
+            .lineLimit(1)
+            .minimumScaleFactor(0.34)
+            .padding(.horizontal, 8)
+            .offset(y: 5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

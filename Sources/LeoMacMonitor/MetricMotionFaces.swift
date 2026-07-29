@@ -1,6 +1,7 @@
 import SwiftUI
 
 private func motionClamp(_ value: Double) -> Double { min(1, max(0, value)) }
+private func motionUnitPhase(_ value: Double) -> Double { value - floor(value) }
 
 private func motionPoint(_ center: CGPoint, radius: CGFloat, angle: Double) -> CGPoint {
     CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
@@ -36,7 +37,9 @@ struct CPUMotionFace: View {
 
                     for ring in 0..<3 {
                         let radius = r * (0.55 + CGFloat(ring) * 0.18)
-                        let start = t * (0.34 + p * 0.9) + Double(ring) * 1.8
+                        // Phase speed is intentionally independent of live load. Multiplying the
+                        // absolute clock by a value that changes every sample makes the orbit jump.
+                        let start = t * (0.52 + Double(ring) * 0.07) + Double(ring) * 1.8
                         context.stroke(motionArc(center: center, radius: radius, start: start,
                                                  sweep: 0.55 + p * 4.8),
                                        with: .color(pColor.opacity(0.48 + p * 0.42)),
@@ -44,7 +47,7 @@ struct CPUMotionFace: View {
                     }
                     for ring in 0..<2 {
                         let radius = r * (0.34 + CGFloat(ring) * 0.13)
-                        let start = -t * (0.28 + e * 0.75) + Double(ring) * .pi
+                        let start = -t * (0.43 + Double(ring) * 0.06) + Double(ring) * .pi
                         context.stroke(motionArc(center: center, radius: radius, start: start,
                                                  sweep: 0.7 + e * 4.4),
                                        with: .color(eColor.opacity(0.48 + e * 0.42)),
@@ -89,7 +92,8 @@ struct GPUMotionFace: View {
                     for index in 0..<30 {
                         let seed = Double(index)
                         let orbit = 0.25 + (seed * 0.618).truncatingRemainder(dividingBy: 1) * 0.75
-                        let angle = seed * 2.399 + t * (0.22 + u * 1.25) * (index.isMultiple(of: 2) ? 1 : -1)
+                        let orbitSpeed = 0.42 + seed.truncatingRemainder(dividingBy: 5) * 0.035
+                        let angle = seed * 2.399 + t * orbitSpeed * (index.isMultiple(of: 2) ? 1 : -1)
                         let wobble = 0.82 + sin(t * 0.7 + seed) * 0.16
                         let point = motionPoint(center, radius: r * orbit * wobble, angle: angle)
                         let sizeVariation = seed.truncatingRemainder(dividingBy: 3) * 0.25
@@ -203,14 +207,18 @@ private struct PacketLanes: View {
                     var track = Path(); track.move(to: CGPoint(x: 5, y: y)); track.addLine(to: CGPoint(x: size.width - 5, y: y))
                     context.stroke(track, with: .color(Theme.border), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     let fraction = motionClamp(values[index] / max(ceiling, 1))
-                    let speed = 0.18 + fraction * 1.8
+                    // Evenly spaced packets form a seamless wrap. Load controls their size and
+                    // visibility, while a stable clock prevents sample updates from resetting them.
+                    let speed = 0.32 + Double(index) * 0.055
                     for packet in 0..<4 {
-                        let phase = (t * speed + Double(packet) / 4 + Double(index) * 0.13)
-                            .truncatingRemainder(dividingBy: 1)
+                        let phase = motionUnitPhase(t * speed + Double(packet) / 4 + Double(index) * 0.13)
                         let x = 5 + (size.width - 10) * CGFloat(phase)
                         let radius: CGFloat = 2.2 + CGFloat(fraction) * 2.3
                         let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
-                        context.fill(Path(ellipseIn: rect), with: .color(colors[index].opacity(fraction > 0.01 ? 0.92 : 0.16)))
+                        let edgeFade = min(1, min(phase, 1 - phase) * 14)
+                        let baseOpacity = fraction > 0.01 ? 0.92 : 0.16
+                        context.fill(Path(ellipseIn: rect),
+                                     with: .color(colors[index].opacity(baseOpacity * edgeFade)))
                     }
                 }
             }
@@ -250,7 +258,9 @@ struct AIWorkloadMotionFace: View {
                         let nodeRect = CGRect(x: node.x - 7, y: node.y - 7, width: 14, height: 14)
                         context.fill(Path(ellipseIn: nodeRect), with: .color(states[index] ? colors[index] : Theme.border))
                         if states[index] {
-                            let phase = (t * 0.82 + Double(index) * 0.21).truncatingRemainder(dividingBy: 1)
+                            // Cosine ping-pong arrives at both endpoints with zero velocity; there
+                            // is no teleport from the hub back to the engine node.
+                            let phase = 0.5 - 0.5 * cos(t * 1.45 + Double(index) * 1.35)
                             let pulse = CGPoint(x: node.x + (center.x - node.x) * phase,
                                                 y: node.y + (center.y - node.y) * phase)
                             let pulseRect = CGRect(x: pulse.x - 3, y: pulse.y - 3, width: 6, height: 6)
@@ -277,6 +287,7 @@ struct SensorsMotionFace: View {
 
     var body: some View {
         let fraction = motionClamp(maximumCelsius / Theme.hotCelsius)
+        let fanActivity = motionClamp(rpm / 4_000)
         let accent = Theme.heat(celsius: maximumCelsius)
         MotionCardFace(title: "Sensors", primary: String(format: "%.0f°C · %.0f rpm", maximumCelsius, rpm),
                        primaryValue: maximumCelsius, status: pressureLabel, accent: accent) {
@@ -297,14 +308,43 @@ struct SensorsMotionFace: View {
                                                               dashPhase: t * (ring.isMultiple(of: 2) ? 5 : -5)))
                         }
                     }
-                    Image(systemName: "fanblades.fill")
-                        .font(.system(size: min(UIScale.scaled(42), 58), weight: .medium))
-                        .foregroundStyle(accent)
-                        .rotationEffect(.degrees(rpm < 200 ? 0 : t * 360 * min(1.4, max(0.2, rpm / 4_000))))
-                        .shadow(color: accent.opacity(0.42), radius: 8)
+                    ContinuousFanRotor(date: date, rpm: rpm, activity: fanActivity, accent: accent)
                 }
             }
         }
+    }
+}
+
+/// Integrates sampled RPM into the existing phase instead of recomputing `absoluteTime × rpm`.
+/// A speed change therefore accelerates the fan from its current angle without a visible restart.
+private struct ContinuousFanRotor: View {
+    let date: Date
+    let rpm: Double
+    let activity: Double
+    let accent: Color
+
+    @State private var angle: Double = 0
+    @State private var lastDate: Date?
+
+    var body: some View {
+        Image(systemName: "fanblades.fill")
+            .font(.system(size: min(UIScale.scaled(42), 58), weight: .medium))
+            .foregroundStyle(accent.opacity(0.58 + activity * 0.42))
+            .rotationEffect(.degrees(angle))
+            .shadow(color: accent.opacity(0.28 + activity * 0.32),
+                    radius: 5 + activity * 7)
+            .onAppear { lastDate = date }
+            .onChange(of: date) { _, nextDate in
+                guard let previous = lastDate else {
+                    lastDate = nextDate
+                    return
+                }
+                // Cap resume gaps so an inactive window never produces a catch-up jump.
+                let delta = min(0.12, max(0, nextDate.timeIntervalSince(previous)))
+                let degreesPerSecond = rpm < 200 ? 0 : min(900, rpm * 0.30)
+                angle = motionUnitPhase((angle + degreesPerSecond * delta) / 360) * 360
+                lastDate = nextDate
+            }
     }
 }
 
@@ -349,14 +389,14 @@ private struct DuplexWave: View {
         for index in 0...count {
             let x = size.width * CGFloat(index) / CGFloat(count)
             let envelope = sin(.pi * Double(index) / Double(count))
-            let y = baseline + CGFloat(sin(Double(index) * 0.55 - time * direction * (1.4 + value * 4))
+            let y = baseline + CGFloat(sin(Double(index) * 0.55 - time * direction * 2.15)
                                        * envelope * (5 + value * 18))
             index == 0 ? path.move(to: CGPoint(x: x, y: y)) : path.addLine(to: CGPoint(x: x, y: y))
         }
         context.stroke(path, with: .color(color.opacity(0.35 + value * 0.62)),
                        style: StrokeStyle(lineWidth: 2.3, lineCap: .round))
-        let phase = (time * direction * (0.22 + value * 1.35)).truncatingRemainder(dividingBy: 1)
-        let normalized = phase < 0 ? phase + 1 : phase
+        // A sinusoidal shuttle reverses smoothly at the edges instead of wrapping abruptly.
+        let normalized = 0.5 + 0.46 * sin(time * direction * 1.18)
         let x = size.width * CGFloat(normalized)
         let packet = CGRect(x: x - 4, y: baseline - 4, width: 8, height: 8)
         context.fill(Path(ellipseIn: packet), with: .color(color.opacity(value > 0.01 ? 1 : 0.16)))
@@ -371,7 +411,6 @@ struct DiskMotionFace: View {
     let healthy: Bool
 
     var body: some View {
-        let activity = motionClamp((read + write) / max(ceiling, 1))
         let accent = healthy ? Palette.flowIn.color : Palette.State.critical.color
         MotionCardFace(title: "Disk", primary: "读 \(formatRate(read)) · 写 \(formatRate(write))",
                        primaryValue: read + write, status: healthy ? "I/O 实时" : "健康警告", accent: accent) {
@@ -385,7 +424,7 @@ struct DiskMotionFace: View {
                     for ring in 0..<4 {
                         let radius = r * (0.35 + CGFloat(ring) * 0.17)
                         let clockwise = ring.isMultiple(of: 2) ? 1.0 : -1.0
-                        let start = t * clockwise * (0.35 + activity * 2.2) + Double(ring)
+                        let start = t * clockwise * (0.48 + Double(ring) * 0.06) + Double(ring)
                         let fraction = ring.isMultiple(of: 2) ? readF : writeF
                         let color = ring.isMultiple(of: 2) ? Palette.flowIn.color : Palette.flowOut.color
                         context.stroke(motionArc(center: center, radius: radius, start: start,
