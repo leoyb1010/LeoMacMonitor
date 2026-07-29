@@ -251,9 +251,11 @@ struct DashboardView: View {
                         .frame(height: Layout.Row.overviewGrid)
                 }
 
-                // Detailed AI runtime and processes stay available below the two overview rows.
+                // Detailed coding-agent status and local model runtimes stay below the overview.
                 HStack(alignment: .top, spacing: Space.row) {
-                    AIRuntimeCard(runtime: snapshot.aiRuntime,
+                    AIRuntimeCard(agents: snapshot.agentWorkload ?? .empty,
+                                  processes: snapshot.processes,
+                                  runtime: snapshot.aiRuntime,
                                   api: snapshot.runtimeAPI,
                                   budget: snapshot.memoryBudget,
                                   memoryRisk: s.memoryRisk,
@@ -263,7 +265,8 @@ struct DashboardView: View {
                                   benchmark: s.benchmark,
                                   benchmarkError: s.benchmarkError,
                                   onBenchmark: onBenchmark ?? {},
-                                  allowBenchmark: onBenchmark != nil)
+                                  allowBenchmark: onBenchmark != nil,
+                                  onInspect: onInspect)
                     ProcessCard(processes: snapshot.processes, allowKill: onBenchmark != nil, onInspect: onInspect)
                 }
                 .frame(height: Layout.Row.scrolling)
@@ -774,6 +777,8 @@ private struct HardwareAIWorkloadCard: View {
 /// Composes runtime detection (①) and the memory budget (②) under the hero. The ③
 /// model/tokens-per-sec lines arrive with the opt-in runtime API.
 private struct AIRuntimeCard: View {
+    let agents: AgentWorkloadSample
+    let processes: [ProcessRow]
     let runtime: AIRuntimeSample
     let api: RuntimeAPISample
     let budget: MemoryBudget
@@ -785,6 +790,7 @@ private struct AIRuntimeCard: View {
     let benchmarkError: String?
     let onBenchmark: () -> Void
     var allowBenchmark = true        // false during replay — no live runtime to benchmark
+    var onInspect: ((ProcessRow) -> Void)? = nil
 
     private static let gb = 1_073_741_824.0
 
@@ -795,14 +801,85 @@ private struct AIRuntimeCard: View {
     }
 
     var body: some View {
-        Card(title: "AI Runtime") {
+        Card(title: "Agent Runtime") {
             VStack(alignment: .leading, spacing: Space.tight) {
-                header
+                agentHeader
+                ForEach(agentKinds, id: \.rawValue) { agentRow($0) }
+                Divider().overlay(Theme.border)
+                modelRuntimeHeader
                 if modelPresent { engineLine }
                 modelLine
                 budgetLine
                 benchmarkLine
             }
+        }
+    }
+
+    private var agentKinds: [AgentKind] {
+        let fixed: [AgentKind] = [.codex, .claude, .workBuddy]
+        let extras = agents.workloads.map(\.kind).filter { !fixed.contains($0) }
+        return fixed + extras
+    }
+
+    @ViewBuilder private var agentHeader: some View {
+        HStack(spacing: Space.row) {
+            Image(systemName: agents.activeCount > 0 ? "bolt.circle.fill" : "circle.hexagongrid.fill")
+                .font(.system(size: Icon.large))
+                .foregroundStyle(agents.primary?.kind.color ?? Theme.faint)
+            Text(agents.runningCount > 0 ? "\(agents.runningCount) 个 Agent" : "未检测到 Coding Agent")
+                .font(Theme.font(.emphasis, .strong))
+                .foregroundStyle(agents.runningCount > 0 ? Theme.text : Theme.dim)
+            if agents.runningCount > 0 {
+                Text(agents.activeCount > 0 ? "\(agents.activeCount) 个工作中" : "全部等待")
+                    .font(Theme.font(.detail, .strong))
+                    .foregroundStyle(agents.activeCount > 0 ? Theme.accent : Theme.dim)
+                Spacer(minLength: 0)
+                Text(String(format: "CPU %.0f%% · RAM %.1fG",
+                            agents.totalCPUPercent, Double(agents.totalMemoryBytes) / Self.gb))
+                    .font(Theme.font(.detail)).foregroundStyle(Theme.dim)
+                    .lineLimit(1).minimumScaleFactor(0.65)
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func agentRow(_ kind: AgentKind) -> some View {
+        let workload = agents.workload(for: kind)
+        let status: (String, Color) = {
+            guard let workload else { return ("未运行", Theme.faint) }
+            switch workload.state {
+            case .working: return ("工作中", kind.color)
+            case .recentlyActive: return ("刚活跃", Palette.State.warn.color)
+            case .waiting: return ("等待", Theme.dim)
+            }
+        }()
+
+        return HStack(spacing: Space.row) {
+            Image(systemName: kind.symbol)
+                .foregroundStyle(workload == nil ? Theme.faint : kind.color)
+                .frame(width: Icon.medium)
+            Text(kind.displayName)
+                .font(Theme.font(kind == .workBuddy ? .detail : .body, .strong))
+                .foregroundStyle(workload == nil ? Theme.faint : Theme.text)
+                .frame(width: 126, alignment: .leading)
+            Circle().fill(status.1).frame(width: Layout.Dot.status, height: Layout.Dot.status)
+            Text(status.0).font(Theme.font(.body, .strong)).foregroundStyle(status.1)
+            Spacer(minLength: 0)
+            if let workload {
+                Text(String(format: "%d 进程 · CPU %.0f%% · %.1f GB",
+                            workload.processCount, workload.cpuPercent, workload.memoryMB / 1024))
+                    .font(Theme.font(.detail)).foregroundStyle(Theme.dim)
+                    .lineLimit(1).minimumScaleFactor(0.62)
+            } else {
+                Text("—").font(Theme.font(.detail)).foregroundStyle(Theme.faint)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let pid = workload?.primaryPID,
+                  let process = processes.first(where: { $0.pid == pid }) else { return }
+            onInspect?(process)
         }
     }
 
@@ -840,12 +917,13 @@ private struct AIRuntimeCard: View {
         }
     }
 
-    @ViewBuilder private var header: some View {
+    @ViewBuilder private var modelRuntimeHeader: some View {
         if runtime.isActive, let kind = runtime.primaryKind {
             HStack(spacing: Space.card) {
-                Image(systemName: kind.symbol).font(.system(size: Icon.large)).foregroundStyle(kind.color)
+                Text("本地模型").font(Theme.font(.detail, .strong)).foregroundStyle(Theme.faint)
+                Image(systemName: kind.symbol).font(.system(size: Icon.small)).foregroundStyle(kind.color)
                 Text(kind.displayName)
-                    .font(Theme.font(.headline, .strong))
+                    .font(Theme.font(.body, .strong))
                     .foregroundStyle(Theme.text)
                 Text(String(format: "RAM %.1f GB · CPU %.0f%%",
                             Double(runtime.primaryMemoryBytes) / Self.gb, runtime.cpuPercent(of: kind)))
@@ -857,9 +935,10 @@ private struct AIRuntimeCard: View {
             }
         } else {
             HStack(spacing: Space.card) {
-                Image(systemName: "brain").font(.system(size: Icon.large)).foregroundStyle(Theme.faint)
-                Text("No local AI runtime detected")
-                    .font(Theme.font(.emphasis)).foregroundStyle(Theme.dim)
+                Text("本地模型").font(Theme.font(.detail, .strong)).foregroundStyle(Theme.faint)
+                Image(systemName: "brain").font(.system(size: Icon.small)).foregroundStyle(Theme.faint)
+                Text("未检测到 Ollama / MLX / LM Studio")
+                    .font(Theme.font(.detail)).foregroundStyle(Theme.dim)
                 Spacer(minLength: 0)
             }
         }

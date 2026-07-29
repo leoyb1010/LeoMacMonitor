@@ -84,6 +84,7 @@
 
 "AI Workload" = "AI 工作负载";
 "AI Runtime" = "AI 运行时";
+"Agent Runtime" = "Agent 运行状态";
 "CPU" = "CPU";
 "GPU" = "GPU";
 "ANE" = "神经网络引擎";

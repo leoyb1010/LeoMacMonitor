@@ -1,5 +1,11 @@
 # 更新日志
 
+## 2.2.1 — 2026-07-29
+
+- 修复第三行“AI 运行时”仍只检测 Ollama、MLX、LM Studio，未展示 Codex、Claude、WorkBuddy 的信息架构问题
+- 第三行更名为“Agent 运行状态”，固定显示三种主 Agent 的工作状态、进程数、CPU 与内存，并支持点击进入进程检查器
+- 本地模型服务保留为 Agent 明细下方的次级区域，清楚区分 Coding Agent 与模型推理运行时
+
 ## 2.2.0 — 2026-07-29
 
 - AI 工作负载从硬件引擎摘要升级为本机 Coding Agent 进程监控，首屏固定呈现 Codex、Claude 与 WorkBuddy
