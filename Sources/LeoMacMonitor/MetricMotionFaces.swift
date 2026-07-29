@@ -1,4 +1,5 @@
 import SwiftUI
+import LeoMacMonitorCore
 
 private func motionClamp(_ value: Double) -> Double { min(1, max(0, value)) }
 private func motionUnitPhase(_ value: Double) -> Double { value - floor(value) }
@@ -220,6 +221,106 @@ private struct PacketLanes: View {
                         context.fill(Path(ellipseIn: rect),
                                      with: .color(colors[index].opacity(baseOpacity * edgeFade)))
                     }
+                }
+            }
+        }
+    }
+}
+
+struct AgentWorkloadMotionFace: View {
+    let sample: AgentWorkloadSample
+
+    private var kinds: [AgentKind] {
+        let anchors: [AgentKind] = [.codex, .claude, .workBuddy]
+        let extras = sample.workloads.map(\.kind).filter { !anchors.contains($0) }
+        return anchors + Array(extras.prefix(4))
+    }
+
+    private var primary: String {
+        if sample.activeCount > 0 { return "\(sample.activeCount) 活跃 · 共 \(sample.runningCount)" }
+        if sample.runningCount > 0 { return "\(sample.runningCount) 个待命" }
+        return "等待 Agent"
+    }
+
+    var body: some View {
+        let accent = sample.primary?.kind.color ?? Theme.accent
+        MotionCardFace(title: "AI Workload", primary: primary,
+                       primaryValue: sample.totalCPUPercent,
+                       status: sample.activeCount > 0 ? "工作中" : sample.runningCount > 0 ? "待命" : "未检测",
+                       accent: accent) {
+            ActiveMetricCanvas(fps: 20) { date in
+                Canvas(rendersAsynchronously: true) { context, size in
+                    let t = date.timeIntervalSinceReferenceDate
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    let radius = min(size.width, size.height) * 0.39
+
+                    for (index, kind) in kinds.enumerated() {
+                        let angle = -.pi / 2 + Double(index) / Double(max(kinds.count, 1)) * .pi * 2
+                        let node = motionPoint(center, radius: radius, angle: angle)
+                        let workload = sample.workload(for: kind)
+                        let active = workload?.state == .working
+                        let recent = workload?.state == .recentlyActive
+                        let color = workload == nil ? Theme.border : kind.color
+                        let intensity = motionClamp((workload?.cpuPercent ?? 0) / 100)
+
+                        var link = Path(); link.move(to: center); link.addLine(to: node)
+                        context.stroke(link, with: .color(color.opacity(active ? 0.68 : recent ? 0.38 : 0.20)),
+                                       style: StrokeStyle(lineWidth: active ? 2.2 : 1.1,
+                                                          dash: active ? [5, 5] : [2, 6],
+                                                          dashPhase: active ? -t * 18 : 0))
+
+                        if active {
+                            // Radar rings vanish before their phase wraps; three staggered copies
+                            // create a continuous pulse with no visible restart boundary.
+                            for ring in 0..<3 {
+                                let phase = motionUnitPhase(t * 0.34 + Double(ring) / 3)
+                                let ringRadius = CGFloat(7 + phase * (21 + intensity * 8))
+                                let ringRect = CGRect(x: node.x - ringRadius, y: node.y - ringRadius,
+                                                      width: ringRadius * 2, height: ringRadius * 2)
+                                context.stroke(Path(ellipseIn: ringRect),
+                                               with: .color(color.opacity((1 - phase) * 0.48)),
+                                               style: StrokeStyle(lineWidth: 1.4))
+                            }
+
+                            let travel = 0.5 - 0.5 * cos(t * 1.35 + Double(index) * 0.9)
+                            let packet = CGPoint(x: node.x + (center.x - node.x) * travel,
+                                                 y: node.y + (center.y - node.y) * travel)
+                            context.fill(Path(ellipseIn: CGRect(x: packet.x - 3, y: packet.y - 3,
+                                                                width: 6, height: 6)),
+                                         with: .color(color))
+                        }
+
+                        let breathe = workload == nil ? 0.72 : 0.92 + sin(t * 1.6 + Double(index)) * 0.08
+                        let nodeRadius = CGFloat((active ? 8.0 : 6.0) * breathe)
+                        let nodeRect = CGRect(x: node.x - nodeRadius, y: node.y - nodeRadius,
+                                              width: nodeRadius * 2, height: nodeRadius * 2)
+                        context.fill(Path(ellipseIn: nodeRect), with: .color(color.opacity(workload == nil ? 0.28 : 0.92)))
+                        context.stroke(Path(ellipseIn: nodeRect.insetBy(dx: -3, dy: -3)),
+                                       with: .color(color.opacity(active ? 0.70 : 0.24)), lineWidth: 1.2)
+
+                        let shortName: String = switch kind {
+                        case .workBuddy: "WB"
+                        case .openCode: "OC"
+                        case .cursor: "CUR"
+                        case .copilot: "COP"
+                        default: String(kind.displayName.prefix(3)).uppercased()
+                        }
+                        let label = context.resolve(
+                            Text(shortName).font(.system(size: 8, weight: .bold, design: .rounded))
+                                .foregroundStyle(workload == nil ? Theme.faint : color)
+                        )
+                        let labelY = node.y < center.y ? node.y - 15 : node.y + 15
+                        context.draw(label, at: CGPoint(x: node.x, y: labelY), anchor: .center)
+                    }
+
+                    let hubRadius: CGFloat = 12 + CGFloat(sample.activeCount) * 2
+                    let hubRect = CGRect(x: center.x - hubRadius, y: center.y - hubRadius,
+                                         width: hubRadius * 2, height: hubRadius * 2)
+                    context.fill(Path(ellipseIn: hubRect), with: .radialGradient(
+                        Gradient(colors: [Color.white.opacity(0.88), accent.opacity(0.70), accent.opacity(0.06)]),
+                        center: center, startRadius: 0, endRadius: hubRadius))
+                    context.stroke(Path(ellipseIn: hubRect.insetBy(dx: -5, dy: -5)),
+                                   with: .color(accent.opacity(0.45)), lineWidth: 1.6)
                 }
             }
         }

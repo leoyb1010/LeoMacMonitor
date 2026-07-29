@@ -767,6 +767,32 @@ extension AIRuntimeKind {
     }
 }
 
+extension AgentKind {
+    var symbol: String {
+        switch self {
+        case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .claude: return "sparkles"
+        case .workBuddy: return "person.crop.circle.badge.checkmark"
+        case .openCode: return "terminal.fill"
+        case .gemini: return "diamond.fill"
+        case .cursor: return "cursorarrow.rays"
+        case .copilot: return "infinity"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .codex: return Theme.accent
+        case .claude: return Palette.eCPU.color
+        case .workBuddy: return Palette.ane.color
+        case .openCode: return Palette.flowIn.color
+        case .gemini: return Palette.pCPU.color
+        case .cursor: return MetricPalette.gpuMemC
+        case .copilot: return Palette.memory.color
+        }
+    }
+}
+
 /// Identity colour per sensor group, so the Sensors card's chart and its rows agree: each row
 /// carries a swatch in the colour of its own line. Lives here (UI layer) for the same reason
 /// `Bottleneck.color` does — `LeoMacMonitorCore` stays SwiftUI-free.

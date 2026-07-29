@@ -190,9 +190,19 @@ struct MenuBarView: View {
         HStack(spacing: gap) {
             statusChip("ANE", String(format: "%.1f W", s.power.aneWatts), MetricPalette.aneC)
             statusChip("MEDIA", String(format: "%.1f GB/s", s.bandwidth.mediaGBs), MetricPalette.mediaC)
-            statusChip("AI", s.aiRuntimeLabel, monitor.bottleneck.color)
+            statusChip("AGENT", agentStatus(s), agentStatusColor(s))
             statusChip("FITS", s.memoryBudget.fitsNow.first?.label ?? "—", Palette.memory.color)
         }
+    }
+
+    private func agentStatus(_ snapshot: SystemSnapshot) -> String {
+        guard let sample = snapshot.agentWorkload, let primary = sample.primary else { return "未检测" }
+        let suffix = primary.isActive ? "工作中" : primary.state == .recentlyActive ? "刚活跃" : "等待"
+        return "\(primary.kind.displayName) \(suffix)"
+    }
+
+    private func agentStatusColor(_ snapshot: SystemSnapshot) -> Color {
+        snapshot.agentWorkload?.primary?.kind.color ?? Theme.faint
     }
 
     private func statusChip(_ label: String, _ value: String, _ color: Color) -> some View {

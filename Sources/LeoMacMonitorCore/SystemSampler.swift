@@ -34,6 +34,7 @@ public final class SystemSampler: @unchecked Sendable {
     private let battery = BatterySampler()
     private let processes = ProcessSampler()
     private let aiRuntime = AIRuntimeSampler()
+    private let agentWorkload = AgentWorkloadSampler()
 
     // Peripheral battery (Magic/AirPods): heavier than a 1 s tick, so sample on a short cadence
     // and reuse between ticks. 5 s drives the cheap IORegistry HID scan (Magic Mouse/keyboard, and
@@ -53,6 +54,7 @@ public final class SystemSampler: @unchecked Sendable {
     // gap just widens the interval. (See docs/energy-optimization.md FIX 5.)
     private var cachedProcesses: [ProcessRow] = []
     private var cachedAIRuntime = AIRuntimeSample()
+    private var cachedAgentWorkload = AgentWorkloadSample.empty
     private var lastProcessSample: Date = .distantPast
     private let processInterval: TimeInterval = 2.5
 
@@ -103,6 +105,7 @@ public final class SystemSampler: @unchecked Sendable {
         let procs = sampledProcesses()            // cached ~2.5 s (full set; UI sorts/filters/limits)
         snapshot.processes = procs.rows
         snapshot.aiRuntime = procs.aiRuntime
+        snapshot.agentWorkload = procs.agentWorkload
         // Budget after detection so the resident runtime's RSS lifts `loadable`
         // (pure arithmetic on the already-taken memory sample — no extra syscalls/sleep).
         snapshot.memoryBudget = MemoryBudget.estimate(
@@ -126,12 +129,14 @@ public final class SystemSampler: @unchecked Sendable {
     /// reused otherwise) so the per-second tick stays cheap. CPU% stays correct (ProcessSampler
     /// normalizes by the real wall-time delta). The focused-process Inspector samples separately in
     /// the monitor loop, so it keeps updating every tick.
-    private func sampledProcesses() -> (rows: [ProcessRow], aiRuntime: AIRuntimeSample) {
+    private func sampledProcesses() -> (rows: [ProcessRow], aiRuntime: AIRuntimeSample,
+                                        agentWorkload: AgentWorkloadSample) {
         if Date().timeIntervalSince(lastProcessSample) >= processInterval {
             lastProcessSample = Date()
             cachedProcesses = processes.sample()
             cachedAIRuntime = aiRuntime.sample(from: cachedProcesses)
+            cachedAgentWorkload = agentWorkload.sample(from: cachedProcesses)
         }
-        return (cachedProcesses, cachedAIRuntime)
+        return (cachedProcesses, cachedAIRuntime, cachedAgentWorkload)
     }
 }

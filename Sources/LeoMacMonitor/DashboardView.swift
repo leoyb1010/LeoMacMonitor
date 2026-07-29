@@ -187,7 +187,7 @@ struct DashboardView: View {
                     // Remote Mac: only the hardware cards a Mac agent sends. Same look as local, minus
                     // network/disk/process/AI-runtime (no data over the wire). Re-paired into 3 rows.
                     HStack(alignment: .top, spacing: Space.row) {
-                        AIWorkloadCard(snapshot: snapshot, bottleneck: s.bottleneck, ceilingGBs: s.bandwidthCeilingGBs,
+                        HardwareAIWorkloadCard(snapshot: snapshot, bottleneck: s.bottleneck, ceilingGBs: s.bandwidthCeilingGBs,
                                        cpuThrottling: s.cpuThrottling, cpuClockDrop: s.cpuClockDropFraction,
                                        gpuThrottling: s.gpuThrottling, gpuClockDrop: s.gpuClockDropFraction,
                                        memoryRisk: s.memoryRisk, activity: s.activity,
@@ -234,17 +234,7 @@ struct DashboardView: View {
                                           history: s.history.bandwidth)
                         .frame(height: Layout.Row.overviewGrid)
 
-                    AIWorkloadCard(snapshot: snapshot,
-                                   bottleneck: s.bottleneck,
-                                   ceilingGBs: s.bandwidthCeilingGBs,
-                                   cpuThrottling: s.cpuThrottling,
-                                   cpuClockDrop: s.cpuClockDropFraction,
-                                   gpuThrottling: s.gpuThrottling,
-                                   gpuClockDrop: s.gpuClockDropFraction,
-                                   memoryRisk: s.memoryRisk,
-                                   activity: s.activity,
-                                   onInspect: onInspect,
-                                   allowKill: onBenchmark != nil)
+                    AgentWorkloadCard(snapshot: snapshot, onInspect: onInspect)
                         .frame(height: Layout.Row.overviewGrid)
                     SensorsCard(temperature: snapshot.temperature, thermal: snapshot.thermal,
                                 groupHistory: s.history.sensorGroups)
@@ -456,11 +446,121 @@ private struct WarningBanner: View {
 
 // MARK: - AI Workload (hero)
 
+/// Local coding-agent cockpit. It reads only process identity and aggregate resource counters;
+/// prompt text, conversations, source contents and filenames never enter the sample model.
+private struct AgentWorkloadCard: View {
+    let snapshot: SystemSnapshot
+    var onInspect: ((ProcessRow) -> Void)? = nil
+
+    private var sample: AgentWorkloadSample { snapshot.agentWorkload ?? .empty }
+    private let primaryKinds: [AgentKind] = [.codex, .claude, .workBuddy]
+
+    private var headline: (String, String, Color) {
+        if sample.activeCount > 0 {
+            return ("\(sample.activeCount) 活跃 · 共 \(sample.runningCount)", "bolt.fill", Theme.accent)
+        }
+        if sample.runningCount > 0 {
+            return ("\(sample.runningCount) 个待命", "pause.fill", Theme.dim)
+        }
+        return ("未检测到 Agent", "moon.zzz.fill", Theme.faint)
+    }
+
+    var body: some View {
+        FlippableMetricCard(id: "ai") {
+            Card(title: "AI Workload") {
+                VStack(alignment: .leading, spacing: Space.hair) {
+                    MotionStatusPill(label: headline.0, systemImage: headline.1, color: headline.2)
+
+                    ForEach(primaryKinds, id: \.rawValue) { kind in
+                        agentRow(kind, workload: sample.workload(for: kind))
+                    }
+
+                    let extras = sample.workloads.filter { !primaryKinds.contains($0.kind) }
+                    if !extras.isEmpty {
+                        HStack(spacing: Space.card) {
+                            Image(systemName: "ellipsis.circle.fill")
+                                .foregroundStyle(Theme.faint)
+                            Text(extras.map { $0.kind.displayName }.joined(separator: " · "))
+                                .font(Theme.font(.detail, .strong))
+                                .foregroundStyle(Theme.dim)
+                                .lineLimit(1).minimumScaleFactor(0.62)
+                            Spacer(minLength: 0)
+                            Text("+\(extras.count)")
+                                .font(Theme.font(.detail, .strong)).foregroundStyle(Theme.faint)
+                        }
+                    }
+                }
+            }
+        } back: {
+            AgentWorkloadMotionFace(sample: sample)
+        }
+    }
+
+    private func agentRow(_ kind: AgentKind, workload: AgentWorkload?) -> some View {
+        let presentation = statePresentation(workload)
+        return HStack(spacing: 4) {
+            Image(systemName: kind.symbol)
+                .font(.system(size: Icon.small, weight: .semibold))
+                .foregroundStyle(workload == nil ? Theme.faint : kind.color)
+                .frame(width: 17)
+            Text(kind.displayName)
+                // WorkBuddy is the only fixed anchor longer than the small-display column.
+                // Keep the same baseline and weight, but use the next semantic size down so the
+                // full product name remains visible at 200%+ instead of becoming "WorkBu…".
+                .font(Theme.font(kind == .workBuddy ? .caption : .detail, .strong))
+                .foregroundStyle(workload == nil ? Theme.faint : Theme.text)
+                .lineLimit(1).minimumScaleFactor(0.56)
+                .frame(width: 62, alignment: .leading)
+            Circle().fill(presentation.color)
+                .frame(width: Layout.Dot.status, height: Layout.Dot.status)
+                .shadow(color: presentation.color.opacity(workload?.isActive == true ? 0.65 : 0), radius: 4)
+            Text(presentation.label)
+                .font(Theme.font(.detail, .strong))
+                .foregroundStyle(presentation.color)
+                .lineLimit(1).minimumScaleFactor(0.65)
+            Spacer(minLength: 3)
+            if let workload {
+                Text(resourceText(workload))
+                    .font(Theme.font(.detail))
+                    .foregroundStyle(Theme.dim)
+                    .lineLimit(1).minimumScaleFactor(0.48)
+            } else {
+                Text("—").font(Theme.font(.detail)).foregroundStyle(Theme.faint)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let pid = workload?.primaryPID,
+                  let row = snapshot.processes.first(where: { $0.pid == pid }) else { return }
+            onInspect?(row)
+        }
+        .help(workload.map {
+            "\($0.processCount) 个进程 · CPU \(Int($0.cpuPercent.rounded()))% · 内存 \(Int($0.memoryMB.rounded())) MB"
+        } ?? "未运行")
+    }
+
+    private func resourceText(_ workload: AgentWorkload) -> String {
+        let memory = workload.memoryMB >= 1024
+            ? String(format: "%.1fG", workload.memoryMB / 1024)
+            : String(format: "%.0fM", workload.memoryMB)
+        return String(format: "%.0f%% · %@", workload.cpuPercent, memory)
+    }
+
+    private func statePresentation(_ workload: AgentWorkload?) -> (label: String, color: Color) {
+        guard let workload else { return ("未运行", Theme.faint) }
+        switch workload.state {
+        case .working: return ("工作中", workload.kind.color)
+        case .recentlyActive: return ("刚活跃", Palette.State.warn.color)
+        case .waiting: return ("等待", Theme.dim)
+        }
+    }
+}
+
 /// The hero card: a per-engine STATE summary — "where is the work landing, and what limits it?"
 /// Replaces the old repeated raw numbers (Mem BW / GPU %, already shown in their own cards) with
 /// three descriptive, colour-coded states (CPU / GPU-Media-ANE / Memory) built from existing verdicts.
 /// Keeps the AI-workload lens: the GPU line surfaces ANE / Media activity, not just a GPU percent.
-private struct AIWorkloadCard: View {
+private struct HardwareAIWorkloadCard: View {
     let snapshot: SystemSnapshot
     let bottleneck: Bottleneck
     let ceilingGBs: Double

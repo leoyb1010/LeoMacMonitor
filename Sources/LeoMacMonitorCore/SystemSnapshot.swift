@@ -25,6 +25,8 @@ public struct SystemSnapshot: Sendable, Codable {
     public var processes: [ProcessRow] = []
     public var memoryBudget = MemoryBudget.empty
     public var aiRuntime = AIRuntimeSample()
+    /// Optional keeps old recordings/wire payloads decodable; live SystemSampler always fills it.
+    public var agentWorkload: AgentWorkloadSample?
     public var runtimeAPI = RuntimeAPISample()   // stamped by the monitor (opt-in poll)
 
     public init() {}
